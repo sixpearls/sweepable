@@ -304,7 +304,7 @@ class sweeper(object):
         """
         
         bound_args = self.signature.bind(*args, **kwargs)
-        # TODO: allow get_or_create instead of foreignkey model instance?
+        # TODO: allow get_or_create instead of foreignkey model instance? 
         bound_args.apply_defaults()
         num_rows = 1
         varying_fields = []
@@ -317,6 +317,9 @@ class sweeper(object):
                 if num_rows == 1:
                     num_rows = arg_rows
                 else:
+                    # TODO: if multiple parameters are given multiple 
+                    # parameters, should we raise an error or do the tensor 
+                    # product? I guess this could be a setting switch?
                     raise ValueError("Could not broadcast arguments to call")
             if arg_rows > 1:
                 varying_fields.append(arg)
@@ -340,6 +343,10 @@ class sweeper(object):
                 # TODO: include a created_on and completed_on in SweepableModel?
                 # which could be part of the default gen_pathname
                 # and would also create some useful metadata
+
+                # TODO: use constext manager to explicitly do DB dis/connect
+                # AND don't create the instance until function runs and output
+                # fields are assigned (or roll back on error)
                 result = self.function(**query_row)
                 # TODO: need to a binding for the output_fields, 
                 # if single result and is an iterator, this fails
@@ -487,3 +494,7 @@ class sweepable(object):
 
     def __call__(self, function):
         return sweeper(function, self.output_fields)
+
+class sweepable_test(sweepable):
+    def __call__(self, function):
+        return sweeper(function, self.output_fields, istest=True)
