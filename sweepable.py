@@ -2,7 +2,8 @@ import peewee as pw # Lorena Barba doesn't like aliasing imports, what do you th
 import os
 import inspect
 import pickle
-from .version import __version__
+
+__version__ = '0.0.1'
 
 # this should have an option handler for the filename, database type, etc
 data_root = os.path.join('..','data')
@@ -104,6 +105,7 @@ class FileAccessor(pw.FieldAccessor):
     def __set__(self, instance, value):
         # TODO: is there a way to protect this except for a get_or_create call?
         # TODO: should also try to mark objects as immutable?
+        # TODO: type checking based on field.data_type
         if not self.valid_value_type(value):
             raise ValueError("Trying to assign invalid type to ")
         instance.__filedata__[self.field.name] = value
@@ -123,11 +125,14 @@ def pickle_writer(buffer, field, value):
 
 # TODO: If we actually store filepath in DB, we could allow changes in path 
 # generation and still access files created in old schema
-class FileField:
+# TODO: could also store the data_type in the DB, but not sure how to add
+# a single field that spans two columns
+class FileField(pw.CharField):
     accessor_class = FileAccessor
     def __init__(self, data_type=None, path_generator=default_path_generator, 
                  filename_generator=default_filename_generator,
                  reader=pickle_reader, writer=pickle_writer,):
+
         if not inspect.isclass(data_type):
             raise ValueError("Generic FileField requires a data_type")
         self.data_type = data_type
@@ -158,13 +163,6 @@ class FileField:
             os.makedirs(self.get_path(instance))
         with open(self.get_total_path(instance), 'wb') as buffer:
             self.writer(buffer, self, value)
-
-    # copied from pw.Field
-    def bind(self, model, name, set_attribute=True):
-        self.model = model
-        self.name = name
-        if set_attribute:
-            setattr(model, name, self.accessor_class(model, self, name))
 
     def __repr__(self):
         return "<FileField %s on %s>" % (self.__class__.__name__, self.model)
@@ -213,14 +211,17 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
         return
 
 class sweeper(object):
-    def __init__(self, function, output_fields):
+    def __init__(self, function, output_fields, istest=False):
         self.function = function
         self.signature = inspect.signature(self.function)
         self.name = function.__name__ # or __qualname__?
-        self.module = function.__module__
+        self.module = function.__module__ 
+        print(self.module)
+        # TODO: how to get filename instead of __main__?
         self.model = None
         self.input_fields = {}
         self.output_fields = output_fields
+        self.istest = istest
 
         self.process_signature()
         self.validate()
@@ -273,6 +274,9 @@ class sweeper(object):
         """
         arg_fields = {**self.input_fields, **self.output_fields}
         self.model = type(self.name, (SweepableModel,), arg_fields)
+        # TODO: if istest, inspect table and drop if doesn't match
+        # TODO: else: warn if doesn't match
+        # TODO: allow a migrate migrate for non-matching, re-run to fill values
         self.model.create_table()
 
     def get_or_run(self, *args, **kwargs):

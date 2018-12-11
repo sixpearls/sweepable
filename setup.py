@@ -1,12 +1,22 @@
 from setuptools import setup, find_packages
 from codecs import open
 from os import path
+import re
 
-# get the version
-exec(open('version.py').read())
+here = path.abspath(path.dirname(__file__))
+
+# Get the version, modified from 
+# https://packaging.python.org/guides/single-sourcing-package-version/
+with open(path.join(here, 'sweepable.py'), encoding='utf-8') as f:
+    version_file = f.read()
+    version_match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]",
+                              version_file, re.M)
+    if version_match:
+        __version__ = version_match.group(1)
+    else:
+        raise RuntimeError("Unable to find version string.")
 
 # Get the long description from the README file
-here = path.abspath(path.dirname(__file__))
 with open(path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
