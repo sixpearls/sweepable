@@ -24,16 +24,27 @@ class FileAccessor(pw.FieldAccessor):
         return instance.__filedata__[self.field.name]
 
     def valid_value_type(self, value):
-        return isinstance(value, self.field.data_type)
+        return isinstance(value, self.field.data_type) 
 
     def __set__(self, instance, value):
         # TODO: is there a way to protect this except for a get_or_create call?
         # TODO: should also try to mark objects as immutable?
         # TODO: type checking based on field.data_type
-        if not self.valid_value_type(value):
+        if isinstance(value, str):
+            if value == '': # TODO: is it better to use null or ''?
+                return
+            else:
+                instance.__data__[self.field.name] = value
+                instance.__filedata__[self.field.name] = \
+                    self.field.read(instance)
+        elif self.valid_value_type(value):
+            instance.__filedata__[self.field.name] = value
+            instance.__data__[self.field.name] = \
+                self.field.get_total_path(instance)
+            self.field.write(instance, value)
+        else:
             raise ValueError("Trying to assign invalid type to ")
-        instance.__filedata__[self.field.name] = value
-        self.field.write(instance, value)
+
 
 def default_path_generator(field, model_instance):
     return os.path.join(data_root, field.model._meta.table_name, field.name)
@@ -47,16 +58,13 @@ def pickle_reader(buffer, field):
 def pickle_writer(buffer, field, value):
     pickle.dump(value, buffer)
 
-# TODO: If we actually store filepath in DB, we could allow changes in path 
-# generation and still access files created in old schema
-# TODO: could also store the data_type in the DB, but not sure how to add
-# a single field that spans two columns
+# TODO: could also store the data_type in the DB as part of sweepable's meta tables
 class FileField(pw.CharField):
     accessor_class = FileAccessor
     def __init__(self, data_type=None, path_generator=default_path_generator, 
                  filename_generator=default_filename_generator,
                  reader=pickle_reader, writer=pickle_writer,):
-
+        super().__init__(max_length=255, default='') # TODO: settings?
         if not inspect.isclass(data_type):
             raise ValueError("Generic FileField requires a data_type")
         self.data_type = data_type
@@ -77,19 +85,48 @@ class FileField(pw.CharField):
 
     def read(self, instance):
         # TODO: type checking, return a default type on any kind of error
-        with open(self.get_total_path(instance), 'rb') as buffer:
+        with open(instance.__data__[self.name], 'rb') as buffer:
             value = self.reader(buffer, self)
         return value
-
 
     def write(self, instance, value):
         if not os.path.isdir(self.get_path(instance)):
             os.makedirs(self.get_path(instance))
         with open(self.get_total_path(instance), 'wb') as buffer:
             self.writer(buffer, self, value)
+    
+    # TODO: repr's aren't good. look at PW for field template
+    # model class is okay but could be better
+    # model instances (rows) should be <name: in_arg1=, ...>
+    # comes from bound method ModelBase.__new__.<locals>.<lambda> of <sweepable_cnc__reference: None>
 
-    def __repr__(self):
-        return "<FileField %s on %s>" % (self.__class__.__name__, self.model)
+
+try:
+    import numpy
+except:
+    pass
+else:
+    # TODO: Write alternate reader/writer? numpy format? matlab?
+    class NDArrayField(FileField):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, data_type=numpy.ndarray, **kwargs)
+
+
+    type_to_field[numpy.ndarray] = NDArrayField
+
+try:
+    import pandas
+except:
+    pass
+else:
+    # TODO: Alternate reader/writer? (read|to)_csv? Or matlab or other binary?
+    class DataFrameField(FileField):
+        def __init__(*args, **kwargs):
+            super().__init__(*args, data_type=pandas.DataFrame, **kwargs)
+
+
+    type_to_field[pandas.DataFrame] = DataFrameField
+
 
 """
 the full cascade of Metadata, ModelBase, and Model subclasses may not be 
@@ -114,10 +151,9 @@ class SweepableModelBase(pw.ModelBase):
         for key, value in cls.__dict__.items():
             if isinstance(value, FileField):
                 cls._meta.add_filefield(key, value)
+        # TODO: does __repr__ need to go here? not sure why 
+        # SweepableModel.__repr__ is over-wridden by ModelBase :5419
         return cls
-
-    def __repr__(self):
-        return '<Sweepable: %s>' % self.__name__
 
 class SweepableModel(pw.Model, metaclass=SweepableModelBase):
     class Meta:
@@ -126,20 +162,19 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
         model_metadata_class = SweepableMetadata
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.__filedata__ = {}
+        super().__init__(*args, **kwargs)
 
-    # TODO: is there some way to prevent saving that isn't creating?
-    
+    # TODO: __str__ here gets used in ModelBase __repr__ assignment :5419
+    # TODO: is there some way to prevent saving when not creating?
 
 class sweeper(object):
     def __init__(self, function, output_fields, istest=False):
         self.function = function
         self.signature = inspect.signature(self.function)
-        self.name = function.__name__ # or __qualname__?
-        self.module = function.__module__ 
-        print(self.module)
-        # TODO: how to get filename instead of __main__?
+        self.name = function.__code__.co_name
+        self.module = os.path.basename(function.__code__.co_filename)\
+            .split('.py')[0]
         self.model = None
         self.input_fields = {}
         self.output_fields = output_fields
@@ -152,14 +187,14 @@ class sweeper(object):
         # Should this be DRYd up w.r.t. the output field processing?
         for param in self.signature.parameters:
             param_default = self.signature.parameters[param].default
-
-            if (isinstance(param_default, pw.Field) and 
+            
+            if isinstance(param_default, FileField):
+                raise ValueError("I don't know how to handle this yet")
+            elif (isinstance(param_default, pw.Field) and 
             param_default.default is not None):
                 self.input_fields[param] = param_default
             elif isinstance(param_default, sweeper):
                 self.input_fields[param] = pw.ForeignKeyField(param_default.model)
-            elif isinstance(param_default, FileField):
-                raise ValueError("I don't know how to handle this yet")
             elif type(param_default) in type_to_field:
                 self.input_fields[param] = type_to_field[type(param_default)](
                     default=param_default)
@@ -195,7 +230,8 @@ class sweeper(object):
 
         """
         arg_fields = {**self.input_fields, **self.output_fields}
-        self.model = type(self.name, (SweepableModel,), arg_fields)
+        self.model = type(
+            '%s__%s' % (self.module, self.name), (SweepableModel,), arg_fields)
         # TODO: if istest, inspect table and drop if doesn't match
         # TODO: else: warn if doesn't match
         # TODO: allow a migrate migrate for non-matching, re-run to fill values
@@ -205,38 +241,18 @@ class sweeper(object):
         return self.__call__(*args, **kwargs) # or self(*args, **kwargs)?
     
     def __repr__(self):
-        return "<sweepable.sweeper for %s.%s>" % (self.module, self.name)
+        return "<Sweeper for %s.%s>" % (self.module, self.name)
 
-    def __call__(self, *args, **kwargs):
-
-
-        """
-        originally, I was thinking would be very nice to have object-dot-able
-        tracking through foreign keys, but this only has to be accessible if
-        you know you're using sweepable (aka, plotting swept results). The 
-        general runner functions that can be made sweepable don't need to know
-        about this -- assume they're just standard callables.
-
-        But it might be nice if we could provide hooks for caching. And to stay
-        dask compatible, for eventuality. caching for "get" calls should be as
-        performant as building in sweep awareness from the beginning.
-
-        this should be thought of as a get_or_create function from an ORM.
-        should this even handle query's? or should that be in a separate method
-        then break out the "call_function" logic?
-
-        __call__ and get_or_run: try to broadcast to create rows of the DB
-
-        then you can directly access select, get, get_or_none, get_by_id, and
-        filter of the pw.Model from the sweepable
-        """
-        
+    def __call__(self, *args, **kwargs):        
         bound_args = self.signature.bind(*args, **kwargs)
         # TODO: allow get_or_create instead of foreignkey model instance? 
         bound_args.apply_defaults()
         num_rows = 1
         varying_fields = []
         static_fields = {}
+        
+        # TODO: break out the broadcasting logic and apply it to = iterable or
+        # isin type queries.
         for arg, val in bound_args.arguments.items():
             # TODO: handle field types that may have __len__
             # TODO: type checking on arguments
@@ -311,9 +327,9 @@ class sweepable(object):
         output_fields = {}
         for arg in kwargs:
             arg_type = kwargs[arg]
-            if isinstance(arg_type, (pw.Field, FileField)):
+            if isinstance(arg_type, pw.Field):
                 output_fields[arg] = arg_type
-            elif issubclass(arg_type, (pw.Field, FileField)):
+            elif issubclass(arg_type, pw.Field):
                 output_fields[arg] = arg_type()
             else:
                 output_fields[arg] = type_to_field[arg_type]()

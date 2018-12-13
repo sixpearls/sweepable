@@ -20,7 +20,11 @@ system, then performance evaluation.
 2. Refine
 It is good to get in a habit to keep parameters to the top of (sections or 
 cells of) code for each section.
+As much as possible, write the results of each data processing/experimental step
+to file rather than re-running. 
 
+
+3. Prosper!
 
 Using Sweepable
 ---------------
@@ -128,6 +132,26 @@ The ``depends_on`` would tell Sweepable that repeated arguments define a relatio
 
 Development notes
 =================
+originally, I was thinking would be very nice to have object-dot-able
+tracking through foreign keys, but this only has to be accessible if
+you know you're using sweepable (aka, plotting swept results). The 
+general runner functions that can be made sweepable don't need to know
+about this -- assume they're just standard callables.
+
+But it might be nice if we could provide hooks for caching. And to stay
+dask compatible, for eventuality. caching for "get" calls should be as
+performant as building in sweep awareness from the beginning.
+
+this should be thought of as a get_or_create function from an ORM.
+should this even handle query's? or should that be in a separate method
+then break out the "call_function" logic?
+
+__call__ and get_or_run: try to broadcast to create rows of the DB
+
+then you can directly access select, get, get_or_none, get_by_id, and
+filter of the pw.Model from the sweepable
+
+
 references should be simulated once, then loaded (or call a sweepable reference
 generator)
 analysis could call a sweepable reference 
