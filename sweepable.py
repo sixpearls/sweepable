@@ -1,7 +1,10 @@
 import peewee as pw # Lorena Barba doesn't like aliasing imports, what do you think?
+from playhouse import reflection
+from playhouse import migrate
 import os
 import inspect
 import pickle
+import copy
 
 __version__ = '0.0.1'
 
@@ -9,10 +12,18 @@ __version__ = '0.0.1'
 data_root = os.path.join('..','data')
 db_name = 'project_sweeps.db'
 db = pw.SqliteDatabase(os.path.join(data_root, db_name))
+migrator = migrate.SqliteMigrator(db)
+
 type_to_field = {
     int: pw.IntegerField,
     float: pw.FloatField,
 }
+
+try:
+    introspected_models = reflection.Introspector.from_database(db)\
+        .generate_models(literal_column_names=True)
+except:
+    introspected_models = {}
 
 
 class FileAccessor(pw.FieldAccessor):
@@ -64,7 +75,7 @@ class FileField(pw.CharField):
     def __init__(self, data_type=None, path_generator=default_path_generator, 
                  filename_generator=default_filename_generator,
                  reader=pickle_reader, writer=pickle_writer,):
-        super().__init__(max_length=255, default='') # TODO: settings?
+        super().__init__(max_length=255, null=True) # TODO: settings?
         if not inspect.isclass(data_type):
             raise ValueError("Generic FileField requires a data_type")
         self.data_type = data_type
@@ -119,7 +130,7 @@ try:
 except:
     pass
 else:
-    # TODO: Alternate reader/writer? (read|to)_csv? Or matlab or other binary?
+    # TODO: Alternate reader/writer? csv? Or matlab or other binary?
     class DataFrameField(FileField):
         def __init__(*args, **kwargs):
             super().__init__(*args, data_type=pandas.DataFrame, **kwargs)
@@ -165,6 +176,20 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
         self.__filedata__ = {}
         super().__init__(*args, **kwargs)
 
+    def save(self, force_insert=False, only=None):
+        return self.save_run(force_insert, only)
+
+    def save_run(self, force_insert=False, only=None):
+        # TODO: write files to filesystem if necessary
+        return super().save(force_insert, only)
+
+    def delete_instance(self, recursive=False, delete_nullable=False):
+        return self.delete_run(recursive, delete_nullable)
+
+    def delete_run(self, recursive=False, delete_nullable=False):
+        # TODO: remove files from filesystem if necessary
+        return super().delet_instance(self, recursive, delete_nullable)
+
     # TODO: __str__ here gets used in ModelBase __repr__ assignment :5419
     # TODO: is there some way to prevent saving when not creating?
 
@@ -207,7 +232,7 @@ class sweeper(object):
 
     def validate(self):
         """ TODO:
-        [ ] check if table exists and if so, matches current fields
+        [x] check if table exists and if so, matches current fields
         [ ] eventually, would also check that the code hasn't changed -- would
         need to track pip (for all dependency versions) and git (for current 
         research project and all dependencies installed with -e). It would be
@@ -232,10 +257,46 @@ class sweeper(object):
         arg_fields = {**self.input_fields, **self.output_fields}
         self.model = type(
             '%s__%s' % (self.module, self.name), (SweepableModel,), arg_fields)
+        if self.model.__name__ in introspected_models:
+            old_field_set = set(introspected_models[self.model.__name__]\
+                    ._meta.fields.values())
+            new_field_set = set(self.model._meta.fields.values())
+
+            # TODO: are the field hashings sufficiently specific that I can 
+            # rely on set differences?
+
+            drop_fields = old_field_set - new_field_set
+            add_fields = new_field_set - old_field_set
+            
+            for drop_field in drop_fields.copy():
+                if isinstance(drop_field, pw.ForeignKeyField):
+                    mfield = copy.copy(drop_field)
+                    mfield.name = mfield.name.replace('_id', '')
+                    if mfield in add_fields:
+                        drop_fields.remove(drop_field)
+                        add_fields.remove(mfield)
+                        
+
+            # TODO: make transaction
+            # TODO: checks whether I should migrate or throw an error
+            
+            migrate.migrate(
+                *tuple([migrator.drop_column(
+                    table=field.model._meta.table_name,
+                    column_name=field.column_name,
+                    ) for field in drop_fields] +
+                  [migrator.add_column(
+                    table=field.model._meta.table_name,
+                    column_name=field.column_name,
+                    field=field,
+                    ) for field in add_fields])
+            )
+
         # TODO: if istest, inspect table and drop if doesn't match
         # TODO: else: warn if doesn't match
-        # TODO: allow a migrate migrate for non-matching, re-run to fill values
-        self.model.create_table()
+        
+        else:
+            self.model.create_table()
 
     def get_or_run(self, *args, **kwargs):
         return self.__call__(*args, **kwargs) # or self(*args, **kwargs)?
@@ -333,6 +394,8 @@ class sweepable(object):
                 output_fields[arg] = arg_type()
             else:
                 output_fields[arg] = type_to_field[arg_type]()
+        # TODO: better way to enforce nullable column with null default?
+        output_fields[arg].null = True
         self.output_fields = output_fields
 
     def __call__(self, function):
