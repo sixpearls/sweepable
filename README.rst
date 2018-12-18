@@ -22,7 +22,10 @@ It is good to get in a habit to keep parameters to the top of (sections or
 cells of) code for each section.
 As much as possible, write the results of each data processing/experimental step
 to file rather than re-running. 
-
+Get in the habit of seperating useful functions, 
+Start moving "blocks" into different files that can be updated/swapped out.
+Including system parameters but even table column names, etc
+Make sure to save the seed if you use any random numbers so results are repeatable.
 
 3. Prosper!
 
@@ -33,6 +36,9 @@ Then they can be easily adapted to sweepable
 functions. Then get in the habit of breaking out each step in the simulation
 process (i.e., the same reference, run, evaluate or other appropriate
 "pipeline") -- 
+
+How to handle functions that don't lend themselves well to sweepable?
+Code genned or otherwise generic?
 
 
 Example user code
