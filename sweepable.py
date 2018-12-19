@@ -166,6 +166,12 @@ class SweepableModelBase(pw.ModelBase):
         # SweepableModel.__repr__ is over-wridden by ModelBase :5419
         return cls
 
+    def __model_str__(self):
+        return '.'.join(self.__name__.split('__'))
+
+    def __repr__(self):
+        return '<SweepableModel: %s>' % self.__model_str__()
+
 class SweepableModel(pw.Model, metaclass=SweepableModelBase):
     class Meta:
         database = db
@@ -189,6 +195,14 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
     def delete_run(self, recursive=False, delete_nullable=False):
         # TODO: remove files from filesystem if necessary
         return super().delet_instance(self, recursive, delete_nullable)
+    
+    def __instance_str__(self):
+        return ', '.join([
+            '%s=%s' % (field, getattr(self, field)) 
+            for field in self.__class__.sweeper.input_fields])
+    
+    def __repr__(self):
+        return '<%s: %s>' % (self.__class__.__model_str__(), self.__instance_str__())
 
     # TODO: __str__ here gets used in ModelBase __repr__ assignment :5419
     # TODO: is there some way to prevent saving when not creating?
@@ -255,15 +269,18 @@ class sweeper(object):
 
         """
         arg_fields = {**self.input_fields, **self.output_fields}
+        arg_fields['__repr__'] = SweepableModel.__repr__
+        # TODO: this is a bug peewee, __repr__ can't be inherited?
         self.model = type(
             '%s__%s' % (self.module, self.name), (SweepableModel,), arg_fields)
+        self.model.sweeper = self
         if self.model.__name__ in introspected_models:
             old_field_set = set(introspected_models[self.model.__name__]\
                     ._meta.fields.values())
             new_field_set = set(self.model._meta.fields.values())
 
             # TODO: are the field hashings sufficiently specific that I can 
-            # rely on set differences?
+            # rely on set differences? 
 
             drop_fields = old_field_set - new_field_set
             add_fields = new_field_set - old_field_set
