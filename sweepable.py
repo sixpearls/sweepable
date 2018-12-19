@@ -295,20 +295,33 @@ class sweeper(object):
                         add_fields.remove(mfield)
                         
 
-            # TODO: make transaction
-            # TODO: checks whether I should migrate or throw an error
             
-            migrate.migrate(
-                *tuple([migrator.drop_column(
-                    table=field.model._meta.table_name,
-                    column_name=field.column_name,
-                    ) for field in drop_fields] +
-                  [migrator.add_column(
-                    table=field.model._meta.table_name,
-                    column_name=field.column_name,
-                    field=field,
-                    ) for field in add_fields])
-            )
+            # TODO: other checks besides istest flag?
+            if not self.istest and (drop_fields or add_fields):
+                error_string = self.model.__model_str__() + "current code " +\
+                "specification does not match database. You may need to" +\
+                " migrate the database."
+                if drop_fields:
+                    error_string += "\nNon-matching fields in database: " +\
+                        ", ".join([str(el) for el in drop_fields])
+                if add_fields:
+                    error_string += "\nNon-matching fields in code spec: " +\
+                        ", ".join([str(el) for el in add_fields])
+
+                raise ValueError(error_string)
+            else:
+                # TODO: make transaction
+                migrate.migrate(
+                    *tuple([migrator.drop_column(
+                        table=field.model._meta.table_name,
+                        column_name=field.column_name,
+                        ) for field in drop_fields] +
+                      [migrator.add_column(
+                        table=field.model._meta.table_name,
+                        column_name=field.column_name,
+                        field=field,
+                        ) for field in add_fields])
+                )
 
         # TODO: if istest, inspect table and drop if doesn't match
         # TODO: else: warn if doesn't match
