@@ -163,10 +163,10 @@ class SweepableModelBase(pw.ModelBase):
             if isinstance(value, FileField):
                 cls._meta.add_filefield(key, value)
         # TODO: does __repr__ need to go here? not sure why 
-        # SweepableModel.__repr__ is over-wridden by ModelBase :5419
+        # SweepableModel.__repr__ is over-written by ModelBase :5419
         return cls
 
-    def __model_str__(self):
+    def __model_str__(self): # TODO: I'm not sure why I can't overwrite __str__
         return '.'.join(self.__name__.split('__'))
 
     def __repr__(self):
@@ -196,13 +196,13 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
         # TODO: remove files from filesystem if necessary
         return super().delet_instance(self, recursive, delete_nullable)
     
-    def __instance_str__(self):
+    def __str__(self):
         return ', '.join([
             '%s=%s' % (field, getattr(self, field)) 
             for field in self.__class__.sweeper.input_fields])
     
     def __repr__(self):
-        return '<%s: %s>' % (self.__class__.__model_str__(), self.__instance_str__())
+        return '<%s: %s>' % (self.__class__.__model_str__(), self.__str__())
 
     # TODO: __str__ here gets used in ModelBase __repr__ assignment :5419
     # TODO: is there some way to prevent saving when not creating?
@@ -280,7 +280,8 @@ class sweeper(object):
             new_field_set = set(self.model._meta.fields.values())
 
             # TODO: are the field hashings sufficiently specific that I can 
-            # rely on set differences? 
+            # rely on set differences? NO! just hash of 'fieldname.modelname'
+
 
             drop_fields = old_field_set - new_field_set
             add_fields = new_field_set - old_field_set
