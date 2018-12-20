@@ -162,8 +162,6 @@ class SweepableModelBase(pw.ModelBase):
         for key, value in cls.__dict__.items():
             if isinstance(value, FileField):
                 cls._meta.add_filefield(key, value)
-        # TODO: does __repr__ need to go here? not sure why 
-        # SweepableModel.__repr__ is over-written by ModelBase :5419
         return cls
 
     def __model_str__(self): # TODO: I'm not sure why I can't overwrite __str__
@@ -208,7 +206,7 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
     # TODO: is there some way to prevent saving when not creating?
 
 class sweeper(object):
-    def __init__(self, function, output_fields, istest=False):
+    def __init__(self, function, output_fields, do_migrate=False, autosave=True):
         self.function = function
         self.signature = inspect.signature(self.function)
         self.name = function.__code__.co_name
@@ -217,7 +215,8 @@ class sweeper(object):
         self.model = None
         self.input_fields = {}
         self.output_fields = output_fields
-        self.istest = istest
+        self.do_migrate = do_migrate
+        self.autosave = autosave
 
         self.process_signature()
         self.validate()
@@ -279,13 +278,12 @@ class sweeper(object):
                     ._meta.fields.values())
             new_field_set = set(self.model._meta.fields.values())
 
-            # TODO: are the field hashings sufficiently specific that I can 
-            # rely on set differences? NO! just hash of 'fieldname.modelname'
-
-
+            # TODO: other checks for equality; hash is only based on field & 
+            # model name (does python include type?) If PeeWee does defaults on
+            # python side, maybe this is sufficient. 
             drop_fields = old_field_set - new_field_set
             add_fields = new_field_set - old_field_set
-            
+
             for drop_field in drop_fields.copy():
                 if isinstance(drop_field, pw.ForeignKeyField):
                     mfield = copy.copy(drop_field)
@@ -294,10 +292,7 @@ class sweeper(object):
                         drop_fields.remove(drop_field)
                         add_fields.remove(mfield)
                         
-
-            
-            # TODO: other checks besides istest flag?
-            if not self.istest and (drop_fields or add_fields):
+            if not self.do_migrate and (drop_fields or add_fields):
                 error_string = self.model.__model_str__() + "current code " +\
                 "specification does not match database. You may need to" +\
                 " migrate the database."
@@ -322,20 +317,19 @@ class sweeper(object):
                         field=field,
                         ) for field in add_fields])
                 )
-
-        # TODO: if istest, inspect table and drop if doesn't match
-        # TODO: else: warn if doesn't match
         
         else:
             self.model.create_table()
 
-    def get_or_run(self, *args, **kwargs):
+    def select_or_run(self, *args, **kwargs):
+        # returns the SweepableModel instance(s) associated with call(s)
         return self.__call__(*args, **kwargs) # or self(*args, **kwargs)?
     
     def __repr__(self):
         return "<Sweeper for %s.%s>" % (self.module, self.name)
 
-    def __call__(self, *args, **kwargs):        
+    def __call__(self, *args, **kwargs):
+        # returns the original function's outputs
         bound_args = self.signature.bind(*args, **kwargs)
         # TODO: allow get_or_create instead of foreignkey model instance? 
         bound_args.apply_defaults()
@@ -434,4 +428,4 @@ class sweepable(object):
 
 class sweepable_test(sweepable):
     def __call__(self, function):
-        return sweeper(function, self.output_fields, istest=True)
+        return sweeper(function, self.output_fields, do_migrate=True, autosave=False)
