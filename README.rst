@@ -213,6 +213,26 @@ I guess this would be the negative to making it broken-out into functions is
 inherently repeating some persistent information. I guess we could make the
 evaluator aware of sweepable?
 
+[ ] eventually, would also check that the code hasn't changed -- would
+need to track pip (for all dependency versions) and git (for current 
+research project and all dependencies installed with -e). It would be
+really nice if it could check what files (or even classes/functions)
+have been changed and only enforce compatability for that.
+--- check that fieldnames __ tracking has a depends_on, these can
+have no default or None default --- actually, I want the original sweep-
+able functions to be totally agnostic to sweepable API. Adding a
+depends_on makes dot-able namespace routing do more "external" code like
+plotting. Especially with caching, (does that require somehow making 
+these objects more persistent? or will they always be persistent 
+enough?) it should be performant enough.
+
+code changing checks would also have to have a table of sweepable 
+metadata. then check that table in DB for sweepable matches current
+definition. possibly complicated for the file fields.
+
+[ ] for non framework usage, need every function that might hit the
+database to validate
+
 
 Management commands?
 --------------------

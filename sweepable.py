@@ -185,6 +185,7 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
 
     def save_run(self, force_insert=False, only=None):
         # TODO: write files to filesystem if necessary
+        # TODO: remove from sweeper's unsaved instances
         return super().save(force_insert, only)
 
     def delete_instance(self, recursive=False, delete_nullable=False):
@@ -213,6 +214,7 @@ class sweeper(object):
         self.module = os.path.basename(function.__code__.co_filename)\
             .split('.py')[0]
         self.model = None
+        self.unsaved_instances = []
         self.input_fields = {}
         self.output_fields = output_fields
         self.do_migrate = do_migrate
@@ -243,30 +245,7 @@ class sweeper(object):
         # TODO: this is a placeholder for a non-"framework" usage of sweepable
         return
 
-    def validate(self):
-        """ TODO:
-        [x] check if table exists and if so, matches current fields
-        [ ] eventually, would also check that the code hasn't changed -- would
-        need to track pip (for all dependency versions) and git (for current 
-        research project and all dependencies installed with -e). It would be
-        really nice if it could check what files (or even classes/functions)
-        have been changed and only enforce compatability for that.
-        --- check that fieldnames __ tracking has a depends_on, these can
-        have no default or None default --- actually, I want the original sweep-
-        able functions to be totally agnostic to sweepable API. Adding a
-        depends_on makes dot-able namespace routing do more "external" code like
-        plotting. Especially with caching, (does that require somehow making 
-        these objects more persistent? or will they always be persistent 
-        enough?) it should be performant enough.
-
-        code changing checks would also have to have a table of sweepable 
-        metadata. then check that table in DB for sweepable matches current
-        definition. possibly complicated for the file fields.
-
-        [ ] for non framework usage, need every function that might hit the
-        database to validate
-
-        """
+    def validate(self, do_migrate=False):
         arg_fields = {**self.input_fields, **self.output_fields}
         arg_fields['__repr__'] = SweepableModel.__repr__
         # TODO: this is a bug peewee, __repr__ can't be inherited?
@@ -292,7 +271,8 @@ class sweeper(object):
                         drop_fields.remove(drop_field)
                         add_fields.remove(mfield)
                         
-            if not self.do_migrate and (drop_fields or add_fields):
+            if not (self.do_migrate or do_migrate) and \
+            (drop_fields or add_fields):
                 error_string = self.model.__model_str__() + "current code " +\
                 "specification does not match database. You may need to" +\
                 " migrate the database."
@@ -322,16 +302,23 @@ class sweeper(object):
             self.model.create_table()
 
     def select_or_run(self, *args, **kwargs):
-        # returns the SweepableModel instance(s) associated with call(s)
-        return self.__call__(*args, **kwargs) # or self(*args, **kwargs)?
-    
-    def __repr__(self):
-        return "<Sweeper for %s.%s>" % (self.module, self.name)
+        """
+        This will be slower than a query if you are only interested in runs
+        that have already been completed, but this will make sure all points in
+        the run matrix are returned, running them if needed.
+        """
+        query_rows = self.bind_signature(args, kwargs)
 
-    def __call__(self, *args, **kwargs):
-        # returns the original function's outputs
+        model_instances = []
+        for query_row in query_rows:
+            model_instances.append(self.do_run(query_row))
+
+        if len(model_instances) == 1: # TODO: Is this actually a good API?
+            return model_instances[0]
+        return model_instances
+
+    def bind_signature(self, args, kwargs):
         bound_args = self.signature.bind(*args, **kwargs)
-        # TODO: allow get_or_create instead of foreignkey model instance? 
         bound_args.apply_defaults()
         num_rows = 1
         varying_fields = []
@@ -342,7 +329,8 @@ class sweeper(object):
         for arg, val in bound_args.arguments.items():
             # TODO: handle field types that may have __len__
             # TODO: type checking on arguments
-            arg_rows = getattr(val, '__len__', 1) # could break if ndarray?
+            arg_rows_call = getattr(val, '__len__', lambda: 1)
+            arg_rows = arg_rows_call()
             if arg_rows > 1 and arg_rows != num_rows:
                 if num_rows == 1:
                     num_rows = arg_rows
@@ -362,31 +350,65 @@ class sweeper(object):
             for field in varying_fields:
                 query_rows[-1][field] = bound_args.arguments[field][row]
 
-        model_instances = []
-        for query_row in query_rows:
-            instance, needs_to_run = self.model.get_or_create(**query_row)
-            # TODO: should we write our own get_or_create logic?
-            # having the id set before the filefields are created seems nice for
-            # current implementation, but maybe that's wrong anyway and files
-            # should only be saved once the record is created?
-            if needs_to_run:
-                # TODO: include a created_on and completed_on in SweepableModel?
-                # which could be part of the default gen_pathname
-                # and would also create some useful metadata
+        return query_rows
 
-                # TODO: use constext manager to explicitly do DB dis/connect
-                # AND don't create the instance until function runs and output
-                # fields are assigned (or roll back on error)
-                result = self.function(**query_row)
-                # TODO: need to a binding for the output_fields, 
-                # if single result and is an iterator, this fails
-                for output_field, value in zip(self.output_fields, result):
-                    setattr(instance, output_field, value)
-                instance.save()
-            model_instances.append(instance)
-        if num_rows == 1:
-            return instance
-        return model_instances
+    def get_or_run(self, *args, **kwargs):
+        # returns the original function's outputs
+        query_rows = self.bind_signature(args, kwargs)
+        if len(query_rows) > 1:
+            raise ValueError("Calling sweepable with more than one set of " +
+                "parameters. Consider using select_or_run")
+        # returns the SweepableModel instance(s) associated with call(s)
+        query = self.model.select()
+        for field, value in kwargs.items():
+            query = query.where(getattr(self.model, field) == value)
+
+        try:
+            instance = query.get()
+        except self.model.DoesNotExist: # TODO: will this catch 
+            instance = self.model(**kwargs)
+            do_run = True
+        else:
+            do_run = False
+            # TODO: run if any output_field is None
+        if do_run:
+            self.run_instance(instance)
+        return instance
+
+    def __call__(self, *args, **kwargs):
+        instance = self.get_or_run(*args, **kwargs)
+        return tuple([getattr(instance,key) for key in self.output_fields])
+
+    def run_instance(self, instance, do_save=False):
+        """
+        This requires kwargs to completely define the inputs fields
+        """
+        # TODO: include a created_on and completed_on in SweepableModel?
+        # which could be part of the default gen_pathname
+        # and would also create some useful metadata
+
+        # TODO: use constext manager to explicitly do DB dis/connect
+        # AND don't create the instance until function runs and output
+        # fields are assigned (or roll back on error)
+        
+        run_instance.start_eval # 
+        result = self.function(**kwargs)
+        run_instance.end_eval
+
+        # TODO: figure out better way to determine matching lengths
+        if len(self.output_fields) == 1 and getattr(val, '__len__', lambda: 1)() != 1:
+            result = [result]
+        for output_field, value in zip(self.output_fields, result):
+            setattr(instance, output_field, value)
+
+        if self.autosave or do_save:
+            instance.save()
+        else:
+            self.unsaved_instances.append(instance)
+        return instance
+
+    def __repr__(self):
+        return "<Sweeper for %s.%s>" % (self.module, self.name)
 
     def select(self, *fields):
         return self.model.select(*fields)
