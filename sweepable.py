@@ -213,6 +213,7 @@ class sweeper(object):
         self.name = function.__code__.co_name
         self.module = os.path.basename(function.__code__.co_filename)\
             .split('.py')[0]
+
         self.model = None
         self.unsaved_instances = []
         self.input_fields = {}
@@ -221,7 +222,6 @@ class sweeper(object):
         self.autosave = autosave
 
         self.process_signature()
-        self.validate()
 
     def process_signature(self):
         # Should this be DRYd up w.r.t. the output field processing?
@@ -234,6 +234,7 @@ class sweeper(object):
             param_default.default is not None):
                 self.input_fields[param] = param_default
             elif isinstance(param_default, sweeper):
+                # TODO: This causes the FK model to validate; could we defer?
                 self.input_fields[param] = pw.ForeignKeyField(param_default.model)
             elif type(param_default) in type_to_field:
                 self.input_fields[param] = type_to_field[type(param_default)](
@@ -318,6 +319,8 @@ class sweeper(object):
         return model_instances
 
     def bind_signature(self, args, kwargs):
+        # TODO: If we require kwargs, we could possibly skip binding the 
+        # signature and use the model instantiation 
         bound_args = self.signature.bind(*args, **kwargs)
         bound_args.apply_defaults()
         num_rows = 1
@@ -409,6 +412,16 @@ class sweeper(object):
 
     def __repr__(self):
         return "<Sweeper for %s.%s>" % (self.module, self.name)
+
+    @property
+    def model(self):
+        if self._model is None:
+            self.validate()
+        return self._model
+
+    @model.setter
+    def model(self, model):
+        self._model = model
 
     def select(self, *fields):
         return self.model.select(*fields)
