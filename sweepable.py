@@ -5,6 +5,7 @@ import os
 import inspect
 import pickle
 import copy
+import datetime
 
 __version__ = '0.0.1'
 
@@ -31,16 +32,16 @@ class FileAccessor(pw.FieldAccessor):
         if instance is None:
             return self.field
         if self.field.name not in instance.__filedata__:
-            instance.__filedata__[self.field.name] = self.field.read(instance)
+            if self.field.name in instance.__data__:
+                instance.__filedata__[self.field.name] = \
+                    self.field.read(instance)
+            else:
+                return None
         return instance.__filedata__[self.field.name]
-
-    def valid_value_type(self, value):
-        return isinstance(value, self.field.data_type) 
 
     def __set__(self, instance, value):
         # TODO: is there a way to protect this except for a get_or_create call?
         # TODO: should also try to mark objects as immutable?
-        # TODO: type checking based on field.data_type
         if isinstance(value, str):
             if value == '': # TODO: is it better to use null or ''?
                 return
@@ -48,13 +49,15 @@ class FileAccessor(pw.FieldAccessor):
                 instance.__data__[self.field.name] = value
                 instance.__filedata__[self.field.name] = \
                     self.field.read(instance)
-        elif self.valid_value_type(value):
+        elif self.field.valid_value_type(value):
             instance.__filedata__[self.field.name] = value
-            instance.__data__[self.field.name] = \
-                self.field.get_total_path(instance)
-            self.field.write(instance, value)
+            if instance.id is not None:
+                instance.__data__[self.field.name] = \
+                    self.field.get_total_path(instance)
         else:
-            raise ValueError("Trying to assign invalid type to ")
+            raise ValueError("Trying to assign invalid type to %s" % 
+                self.field.name)
+        instance._dirty.add(self.name)
 
 
 def default_path_generator(field, model_instance):
@@ -94,23 +97,37 @@ class FileField(pw.CharField):
         return os.path.join(self.get_path(instance),
                             self.get_filename(instance))
 
+    def valid_value_type(self, value):
+        return isinstance(value, self.data_type) 
+
     def read(self, instance):
-        # TODO: type checking, return a default type on any kind of error
         with open(instance.__data__[self.name], 'rb') as buffer:
             value = self.reader(buffer, self)
+        if not self.valid_value_type(value):
+            raise ValueError("Trying to assign invalid type to %s" % 
+                self.name)
         return value
 
     def write(self, instance, value):
+        # this will update the pathname using the current path function,
+        # TODO: may want to make clearer API for writing vs moving?
+        if instance.id is None:
+            raise ValueError("Cannot write %s because %s has no id" % 
+                (str(self), str(instance)))
+        instance.__data__[self.name] = self.get_total_path(instance)
         if not os.path.isdir(self.get_path(instance)):
             os.makedirs(self.get_path(instance))
+        if os.path.exists(self.get_total_path(instance)):
+            # TODO: a flag to allow over-writing?
+            raise ValueError("File exists for %s" % 
+                '.'.join(str(instnace), self.name))
+
         with open(self.get_total_path(instance), 'wb') as buffer:
             self.writer(buffer, self, value)
-    
-    # TODO: repr's aren't good. look at PW for field template
-    # model class is okay but could be better
-    # model instances (rows) should be <name: in_arg1=, ...>
-    # comes from bound method ModelBase.__new__.<locals>.<lambda> of <sweepable_cnc__reference: None>
 
+    def delete(self, instance):
+        if os.path.exists(self.get_total_path(instance)):
+            os.remove(self.get_total_path(instance))
 
 try:
     import numpy
@@ -146,22 +163,19 @@ to hook into the machinery later
 """
 class SweepableMetadata(pw.Metadata):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.filefields = {}
-
-    def add_filefield(self, field_name, filefield, set_attribute=True):
-        if field_name in self.fields or field_name in self.filefields:
-            raise ValueError("Duplicate field name for FileField")
-        self.filefields[field_name] = filefield
-        filefield.bind(self.model, field_name, set_attribute)
+        self.nonfilefields = {}
+        super().__init__(*args, **kwargs)
 
 
 class SweepableModelBase(pw.ModelBase):
     def __new__(cls, name, bases, attrs):
         cls = super().__new__(cls, name, bases, attrs)
-        for key, value in cls.__dict__.items():
+        for key, value in cls._meta.fields.items():
             if isinstance(value, FileField):
-                cls._meta.add_filefield(key, value)
+                cls._meta.filefields[key] = value
+            else:
+                cls._meta.nonfilefields[key] = value
         return cls
 
     def __model_str__(self): # TODO: I'm not sure why I can't overwrite __str__
@@ -171,6 +185,9 @@ class SweepableModelBase(pw.ModelBase):
         return '<SweepableModel: %s>' % self.__model_str__()
 
 class SweepableModel(pw.Model, metaclass=SweepableModelBase):
+    start_time = pw.DateTimeField()
+    stop_time = pw.DateTimeField()
+
     class Meta:
         database = db
         legacy_table_names = False
@@ -179,26 +196,59 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
     def __init__(self, *args, **kwargs):
         self.__filedata__ = {}
         super().__init__(*args, **kwargs)
-
-    def save(self, force_insert=False, only=None):
-        return self.save_run(force_insert, only)
+        if self.id is None:
+            self.sweeper.unsaved_instances.add(self)
 
     def save_run(self, force_insert=False, only=None):
-        # TODO: write files to filesystem if necessary
-        # TODO: remove from sweeper's unsaved instances
-        return super().save(force_insert, only)
+        """
+        Can honor only and save
+        """
+        if not only:
+            only = self.__data__.copy()
 
-    def delete_instance(self, recursive=False, delete_nullable=False):
-        return self.delete_run(recursive, delete_nullable)
+        dirty_filefields = []
+        for filefield in self._meta.filefields:
+            if filefield in self._dirty:
+                dirty_filefields.append(filefield)
+
+        save_file_fields = False
+
+        if not self.id:
+            # raise error on no id and no force_insert?
+            # TODO: save only= prune(only, non-file) to get ID
+            save_file_fields = True
+            nonfile_only = self._prune_fields(only, 
+                                self._meta.nonfilefields)
+            saveval = super().save(force_insert, nonfile_only)
+            # then save only=prune(only, file) or really fields that may/don't
+            # depend on ID
+            if not self.id:
+                raise ValueError("Could not obtain an ID, try setting " +
+                    "force_insert=True")
+        else:
+            saveval = super().save(force_insert, only)
+
+        # TODO: Is there a way make writing files tied to transaction?
+        for filefield in dirty_filefields:
+            self._meta.fields[filefield].write(self, getattr(self, filefield))
+
+        if save_file_fields:
+            file_only = self._prune_fields(only, 
+                                self._meta.filefields)
+            saveval = super().save(force_insert, file_only)
+
+        if self in self.sweeper.unsaved_instances:
+            self.sweeper.unsaved_instances.pop(self)
+        return saveval
 
     def delete_run(self, recursive=False, delete_nullable=False):
         # TODO: remove files from filesystem if necessary
-        return super().delet_instance(self, recursive, delete_nullable)
+        return super().delete_instance(self, recursive, delete_nullable)
     
     def __str__(self):
         return ', '.join([
             '%s=%s' % (field, getattr(self, field)) 
-            for field in self.__class__.sweeper.input_fields])
+            for field in self.sweeper.input_fields])
     
     def __repr__(self):
         return '<%s: %s>' % (self.__class__.__model_str__(), self.__str__())
@@ -207,19 +257,23 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
     # TODO: is there some way to prevent saving when not creating?
 
 class sweeper(object):
-    def __init__(self, function, output_fields, do_migrate=False, autosave=True):
+    def __init__(self, function, output_fields, auto_migrate=False, 
+    save_on_run=True, delete_files=True):
         self.function = function
         self.signature = inspect.signature(self.function)
         self.name = function.__code__.co_name
         self.module = os.path.basename(function.__code__.co_filename)\
             .split('.py')[0]
 
+        # TODO: figure out how to incorporate classes if it's a method? Or disallow
+
         self.model = None
-        self.unsaved_instances = []
+        self.unsaved_instances = set()
         self.input_fields = {}
         self.output_fields = output_fields
-        self.do_migrate = do_migrate
-        self.autosave = autosave
+        self.auto_migrate = auto_migrate
+        self.save_on_run = save_on_run
+        self.delete_files = delete_files
 
         self.process_signature()
 
@@ -272,7 +326,7 @@ class sweeper(object):
                         drop_fields.remove(drop_field)
                         add_fields.remove(mfield)
                         
-            if not (self.do_migrate or do_migrate) and \
+            if not (self.auto_migrate or do_migrate) and \
             (drop_fields or add_fields):
                 error_string = self.model.__model_str__() + "current code " +\
                 "specification does not match database. You may need to" +\
@@ -320,20 +374,19 @@ class sweeper(object):
 
     def bind_signature(self, args, kwargs):
         # TODO: If we require kwargs, we could possibly skip binding the 
-        # signature and use the model instantiation 
+        # signature and use the model instantiation? I guess that doesn't solve
+        # broadcasting binding either. Can we just overwrite .isin type query
+        # fields?
         bound_args = self.signature.bind(*args, **kwargs)
         bound_args.apply_defaults()
         num_rows = 1
         varying_fields = []
         static_fields = {}
         
-        # TODO: break out the broadcasting logic and apply it to = iterable or
-        # isin type queries.
         for arg, val in bound_args.arguments.items():
             # TODO: handle field types that may have __len__
             # TODO: type checking on arguments
-            arg_rows_call = getattr(val, '__len__', lambda: 1)
-            arg_rows = arg_rows_call()
+            arg_rows = getattr(val, '__len__', lambda: 1)()
             if arg_rows > 1 and arg_rows != num_rows:
                 if num_rows == 1:
                     num_rows = arg_rows
@@ -361,19 +414,23 @@ class sweeper(object):
         if len(query_rows) > 1:
             raise ValueError("Calling sweepable with more than one set of " +
                 "parameters. Consider using select_or_run")
+        else:
+            query_row = query_rows[0]
         # returns the SweepableModel instance(s) associated with call(s)
         query = self.model.select()
-        for field, value in kwargs.items():
+        for field, value in query_row.items():
             query = query.where(getattr(self.model, field) == value)
 
         try:
             instance = query.get()
         except self.model.DoesNotExist: # TODO: will this catch 
-            instance = self.model(**kwargs)
+            instance = self.model(**query_row)
             do_run = True
         else:
             do_run = False
-            # TODO: run if any output_field is None
+            for field in self.output_fields:
+                if getattr(instance, field, None) is None:
+                    do_run = True
         if do_run:
             self.run_instance(instance)
         return instance
@@ -394,20 +451,25 @@ class sweeper(object):
         # AND don't create the instance until function runs and output
         # fields are assigned (or roll back on error)
         
-        run_instance.start_eval # 
+        instance.start_time = datetime.datetime.now()
+        kwargs = {fname: getattr(instance, fname) 
+            for fname in self.input_fields}
         result = self.function(**kwargs)
-        run_instance.end_eval
+        instance.stop_time = datetime.datetime.now()
 
         # TODO: figure out better way to determine matching lengths
-        if len(self.output_fields) == 1 and getattr(val, '__len__', lambda: 1)() != 1:
+        if len(self.output_fields) == 1 and getattr(result, '__len__', lambda: 1)() != 1:
             result = [result]
+        if len(self.output_fields) != len(result):
+            raise ValueError(str(self) + "has mismatch between defined" + 
+                "output fields and returned values for " + str(instance))
         for output_field, value in zip(self.output_fields, result):
             setattr(instance, output_field, value)
 
-        if self.autosave or do_save:
-            instance.save()
+        if self.save_on_run or do_save:
+            instance.save_run()
         else:
-            self.unsaved_instances.append(instance)
+            self.unsaved_instances.add(instance)
         return instance
 
     def __repr__(self):
@@ -463,4 +525,4 @@ class sweepable(object):
 
 class sweepable_test(sweepable):
     def __call__(self, function):
-        return sweeper(function, self.output_fields, do_migrate=True, autosave=False)
+        return sweeper(function, self.output_fields, auto_migrate=True, save_on_run=False)
