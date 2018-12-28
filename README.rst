@@ -8,24 +8,24 @@ flow that
 
 Workflow
 --------
-1. Prototype 
-Using Pyzo (MATLAB-like) or Jupyter notebooks (Mathematica-like) seems very
-natural especially for users who started with MATLAB and/or Mathematica. If you
-don't know how things should behave, these tools allow you to create
-chunks that are run-able while keeping a persistent workspace to incrementally
-test code for each portion of the experiment. For control systems, it is 
-common to generate different reference trajectories, simulate the main control
-system, then performance evaluation.
+1. Prototype
+    Using Pyzo (MATLAB-like) or Jupyter notebooks (Mathematica-like) seems very
+    natural especially for users who started with MATLAB and/or Mathematica. If you
+    don't know how things should behave, these tools allow you to create
+    chunks that are run-able while keeping a persistent workspace to incrementally
+    test code for each portion of the experiment. For control systems, it is 
+    common to generate different reference trajectories, simulate the main control
+    system, then performance evaluation.
 
 2. Refine
-It is good to get in a habit to keep parameters to the top of (sections or 
-cells of) code for each section.
-As much as possible, write the results of each data processing/experimental step
-to file rather than re-running. 
-Get in the habit of seperating useful functions, 
-Start moving "blocks" into different files that can be updated/swapped out.
-Including system parameters but even table column names, etc
-Make sure to save the seed if you use any random numbers so results are repeatable.
+    It is good to get in a habit to keep parameters to the top of (sections or 
+    cells of) code for each section.
+    As much as possible, write the results of each data processing/experimental step
+    to file rather than re-running. 
+    Get in the habit of seperating useful functions, 
+    Start moving "blocks" into different files that can be updated/swapped out.
+    Including system parameters but even table column names, etc
+    Make sure to save the seed if you use any random numbers so results are repeatable.
 
 3. Prosper!
 
@@ -48,12 +48,12 @@ Generic API definition:
 
 .. code-block :: python
 
-import sweepable
+    import sweepable
 
-@sweepable(**output_fields)
-def func_name(arg1=arg1_defualt, ...):
-    ...
-    return
+    @sweepable(**output_fields)
+    def func_name(arg1=arg1_defualt, ...):
+        ...
+        return
 
 
 

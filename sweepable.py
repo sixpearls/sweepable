@@ -1,4 +1,4 @@
-import peewee as pw # Lorena Barba doesn't like aliasing imports, what do you think?
+import peewee
 from playhouse import reflection
 from playhouse import migrate
 import os
@@ -9,15 +9,15 @@ import datetime
 
 __version__ = '0.0.1'
 
-# this should have an option handler for the filename, database type, etc
+# TODO: this should have an option handler for the filename, database type, etc
 data_root = os.path.join('..','data')
 db_name = 'project_sweeps.db'
-db = pw.SqliteDatabase(os.path.join(data_root, db_name))
+db = peewee.SqliteDatabase(os.path.join(data_root, db_name))
 migrator = migrate.SqliteMigrator(db)
 
 type_to_field = {
-    int: pw.IntegerField,
-    float: pw.FloatField,
+    int: peewee.IntegerField,
+    float: peewee.FloatField,
 }
 
 try:
@@ -27,7 +27,7 @@ except:
     introspected_models = {}
 
 
-class FileAccessor(pw.FieldAccessor):
+class FileAccessor(peewee.FieldAccessor):
     def __get__(self, instance, instance_type=None):
         if instance is None:
             return self.field
@@ -71,7 +71,7 @@ def pickle_writer(buffer, field, value):
     pickle.dump(value, buffer)
 
 # TODO: could also store the data_type in the DB as part of sweepable's meta tables
-class FileField(pw.CharField):
+class FileField(peewee.CharField):
     accessor_class = FileAccessor
     def __init__(self, data_type=None, path_generator=default_path_generator, 
                  filename_generator=default_filename_generator,
@@ -132,9 +132,10 @@ class FileField(pw.CharField):
 try:
     import numpy
 except:
-    pass
+    numpy = None
 else:
     # TODO: Write alternate reader/writer? numpy format? matlab?
+
     class NDArrayField(FileField):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, data_type=numpy.ndarray, **kwargs)
@@ -145,7 +146,7 @@ else:
 try:
     import pandas
 except:
-    pass
+    pandas = None
 else:
     # TODO: Alternate reader/writer? csv? Or matlab or other binary?
     class DataFrameField(FileField):
@@ -161,14 +162,14 @@ the full cascade of Metadata, ModelBase, and Model subclasses may not be
 necessary to handle the FileFields, but I am creating them now in case I need
 to hook into the machinery later
 """
-class SweepableMetadata(pw.Metadata):
+class SweepableMetadata(peewee.Metadata):
     def __init__(self, *args, **kwargs):
         self.filefields = {}
         self.nonfilefields = {}
         super().__init__(*args, **kwargs)
 
 
-class SweepableModelBase(pw.ModelBase):
+class SweepableModelBase(peewee.ModelBase):
     def __new__(cls, name, bases, attrs):
         cls = super().__new__(cls, name, bases, attrs)
         for key, value in cls._meta.fields.items():
@@ -184,9 +185,9 @@ class SweepableModelBase(pw.ModelBase):
     def __repr__(self):
         return '<SweepableModel: %s>' % self.__model_str__()
 
-class SweepableModel(pw.Model, metaclass=SweepableModelBase):
-    start_time = pw.DateTimeField()
-    stop_time = pw.DateTimeField()
+class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
+    start_time = peewee.DateTimeField()
+    stop_time = peewee.DateTimeField()
 
     class Meta:
         database = db
@@ -286,12 +287,12 @@ class sweeper(object):
             
             if isinstance(param_default, FileField):
                 raise ValueError("I don't know how to handle this yet")
-            elif (isinstance(param_default, pw.Field) and 
+            elif (isinstance(param_default, peewee.Field) and 
             param_default.default is not None):
                 self.input_fields[param] = param_default
             elif isinstance(param_default, sweeper):
                 # TODO: This causes the FK model to validate; could we defer?
-                self.input_fields[param] = pw.ForeignKeyField(
+                self.input_fields[param] = peewee.ForeignKeyField(
                                                     param_default.model)
             elif type(param_default) in type_to_field:
                 self.input_fields[param] = type_to_field[type(param_default)](
@@ -324,7 +325,7 @@ class sweeper(object):
             add_fields = new_field_set - old_field_set
 
             for drop_field in drop_fields.copy():
-                if isinstance(drop_field, pw.ForeignKeyField):
+                if isinstance(drop_field, peewee.ForeignKeyField):
                     mfield = copy.copy(drop_field)
                     mfield.name = mfield.name.replace('_id', '')
                     if mfield in add_fields:
@@ -502,9 +503,11 @@ class sweeper(object):
     def filter(self, *dq_nodes, **filters):
         return self.model.filter(*dq_nodes, **filters)
 
-    def to_dataframe(self):
-        # TODO: should provide at least a pandas DataFrame export method
-        return
+    if pandas:
+        def to_dataframe(self, query=None):
+            if query is None:
+                query = self.select()
+            return pandas.read_sql(query.sql()[0], db.connection())
 
 
 class sweepable(object):
@@ -512,9 +515,9 @@ class sweepable(object):
         output_fields = {}
         for arg in kwargs:
             arg_type = kwargs[arg]
-            if isinstance(arg_type, pw.Field):
+            if isinstance(arg_type, peewee.Field):
                 output_fields[arg] = arg_type
-            elif issubclass(arg_type, pw.Field):
+            elif issubclass(arg_type, peewee.Field):
                 output_fields[arg] = arg_type()
             else:
                 output_fields[arg] = type_to_field[arg_type]()
