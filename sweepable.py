@@ -104,7 +104,7 @@ class FileField(peewee.CharField):
     def read(self, instance):
         value = self.reader(instance.__data__[self.name], self)
         if not self.valid_value_type(value):
-            raise ValueError("Trying to assign invalid type to %s" % 
+            raise ValueError("Trying to read invalid type to %s" % 
                 self.name)
         return value
 
@@ -220,9 +220,6 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
             self.sweeper.unsaved_instances.append(self)
 
     def save_run(self, force_insert=False, only=None):
-        """
-        Can honor only and save
-        """
         if not only:
             only = self.__data__.copy()
 
@@ -262,8 +259,9 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
         return saveval
 
     def delete_run(self, recursive=False, delete_nullable=False):
-        # TODO: remove files from filesystem if necessary
-        return super().delete_instance(self, recursive, delete_nullable)
+        for filefield in self._meta.filefields:
+            self._meta.fields[filefield].delete(self)
+        return super().delete_instance(recursive, delete_nullable)
     
     def __str__(self):
         return ', '.join([
@@ -416,9 +414,9 @@ class sweeper(object):
                 if num_rows == 1:
                     num_rows = arg_rows
                 else:
-                    # TODO: if multiple parameters are given multiple 
-                    # parameters, should we raise an error or do the tensor 
-                    # product? I guess this could be a setting switch?
+                    # TODO: if multiple parameters are given multiple values, 
+                    # should we raise an error or do the tensor product? I guess
+                    # this could be a setting switch?
                     raise ValueError("Could not broadcast arguments to call")
             if arg_rows > 1:
                 varying_fields.append(arg)
