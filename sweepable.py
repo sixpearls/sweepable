@@ -64,11 +64,14 @@ def default_path_generator(field, model_instance):
 def default_filename_generator(field, model_instance):
     return str(model_instance.id)
 
-def pickle_reader(buffer, field):
-    return pickle.load(buffer)
+def pickle_reader(fname, field):
+    with open(fname, 'rb') as buf:
+        value = pickle.load(buf)
+    return value
 
-def pickle_writer(buffer, field, value):
-    pickle.dump(value, buffer)
+def pickle_writer(fname, field, value):
+    with open(fname, 'wb') as buf:
+        pickle.dump(value, buf)
 
 # TODO: could also store the data_type in the DB as part of sweepable's meta tables
 class FileField(peewee.CharField):
@@ -99,8 +102,7 @@ class FileField(peewee.CharField):
         return isinstance(value, self.data_type) 
 
     def read(self, instance):
-        with open(instance.__data__[self.name], 'rb') as buffer:
-            value = self.reader(buffer, self)
+        value = self.reader(instance.__data__[self.name], self)
         if not self.valid_value_type(value):
             raise ValueError("Trying to assign invalid type to %s" % 
                 self.name)
@@ -122,8 +124,7 @@ class FileField(peewee.CharField):
                     '.'.join(str(instnace), self.name))
                 )
 
-        with open(self.get_total_path(instance), 'wb') as buffer:
-            self.writer(buffer, self, value)
+        self.writer(self.get_total_path(instance), self, value)
 
     def delete(self, instance):
         if os.path.exists(self.get_total_path(instance)):
@@ -134,12 +135,20 @@ try:
 except:
     numpy = None
 else:
-    # TODO: Write alternate reader/writer? numpy format? matlab?
+    def numpy_filename_generator(field, model_instance):
+        return str(model_instance.id) + ".npy"
+
+    def numpy_reader(fname, field):
+        return numpy.load(fname, allow_pickle=False)
+
+    def numpy_writer(fname, field, value):
+        numpy.save(fname, value, allow_pickle=False)
 
     class NDArrayField(FileField):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, data_type=numpy.ndarray, **kwargs)
-
+            super().__init__(*args, data_type=numpy.ndarray, 
+                filename_generator=numpy_filename_generator, 
+                reader=numpy_reader, writer=numpy_writer, **kwargs)
 
     type_to_field[numpy.ndarray] = NDArrayField
 
@@ -148,10 +157,20 @@ try:
 except:
     pandas = None
 else:
-    # TODO: Alternate reader/writer? csv? Or matlab or other binary?
+    def dataframe_filename_generator(field, model_instance):
+        return str(model_instance.id) + ".csv"
+
+    def dataframe_reader(fname, field):
+        return pandas.read_csv(fname, index_col=0)
+
+    def dataframe_writer(fname, field, value):
+        value.to_csv(fname)
+
     class DataFrameField(FileField):
-        def __init__(*args, **kwargs):
-            super().__init__(*args, data_type=pandas.DataFrame, **kwargs)
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, data_type=pandas.DataFrame,
+                filename_generator=dataframe_filename_generator, 
+                reader=dataframe_reader, writer=dataframe_writer, **kwargs)
 
 
     type_to_field[pandas.DataFrame] = DataFrameField
