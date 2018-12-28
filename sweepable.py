@@ -389,7 +389,7 @@ class sweeper(object):
 
         model_instances = []
         for query_row in query_rows:
-            model_instances.append(self.do_run(query_row))
+            model_instances.append(self.get_or_run(**query_row))
 
         if len(model_instances) == 1: # TODO: Is this actually a good API?
             return model_instances[0]
@@ -420,6 +420,8 @@ class sweeper(object):
                     raise ValueError("Could not broadcast arguments to call")
             if arg_rows > 1:
                 varying_fields.append(arg)
+            elif hasattr(val, '__len__') and len(val) == 1:
+                static_fields[arg] = val[0]
             else:
                 static_fields[arg] = val
 
@@ -459,6 +461,7 @@ class sweeper(object):
         return instance
 
     def __call__(self, *args, **kwargs):
+        # TODO: should call return model instance or just output_fields?
         instance = self.get_or_run(*args, **kwargs)
         return tuple([getattr(instance,key) for key in self.output_fields])
 
