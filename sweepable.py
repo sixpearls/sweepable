@@ -42,13 +42,11 @@ class FileAccessor(pw.FieldAccessor):
     def __set__(self, instance, value):
         # TODO: is there a way to protect this except for a get_or_create call?
         # TODO: should also try to mark objects as immutable?
+        if value is None:
+            return
         if isinstance(value, str):
-            if value == '': # TODO: is it better to use null or ''?
-                return
-            else:
-                instance.__data__[self.field.name] = value
-                instance.__filedata__[self.field.name] = \
-                    self.field.read(instance)
+            instance.__data__[self.field.name] = value
+            instance.__filedata__[self.field.name] = self.field.read(instance)
         elif self.field.valid_value_type(value):
             instance.__filedata__[self.field.name] = value
             if instance.id is not None:
@@ -119,8 +117,10 @@ class FileField(pw.CharField):
             os.makedirs(self.get_path(instance))
         if os.path.exists(self.get_total_path(instance)):
             # TODO: a flag to allow over-writing?
-            raise ValueError("File exists for %s" % 
-                '.'.join(str(instnace), self.name))
+            raise ValueError("File %s exists for %s" % 
+                    (self.get_total_path(instance), 
+                    '.'.join(str(instnace), self.name))
+                )
 
         with open(self.get_total_path(instance), 'wb') as buffer:
             self.writer(buffer, self, value)
@@ -197,7 +197,7 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
         self.__filedata__ = {}
         super().__init__(*args, **kwargs)
         if self.id is None:
-            self.sweeper.unsaved_instances.add(self)
+            self.sweeper.unsaved_instances.append(self)
 
     def save_run(self, force_insert=False, only=None):
         """
@@ -213,7 +213,7 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
 
         save_file_fields = False
 
-        if not self.id:
+        if self.id is None:
             # raise error on no id and no force_insert?
             # TODO: save only= prune(only, non-file) to get ID
             save_file_fields = True
@@ -238,7 +238,7 @@ class SweepableModel(pw.Model, metaclass=SweepableModelBase):
             saveval = super().save(force_insert, file_only)
 
         if self in self.sweeper.unsaved_instances:
-            self.sweeper.unsaved_instances.pop(self)
+            self.sweeper.unsaved_instances.remove(self)
         return saveval
 
     def delete_run(self, recursive=False, delete_nullable=False):
@@ -265,10 +265,12 @@ class sweeper(object):
         self.module = os.path.basename(function.__code__.co_filename)\
             .split('.py')[0]
 
-        # TODO: figure out how to incorporate classes if it's a method? Or disallow
+        # TODO: figure out how to incorporate class name if it's a method? 
+        # Or disallow
 
         self.model = None
-        self.unsaved_instances = set()
+        self.unsaved_instances = [] 
+        # TODO: for some reason testing set membership failed but list worked?
         self.input_fields = {}
         self.output_fields = output_fields
         self.auto_migrate = auto_migrate
@@ -289,10 +291,11 @@ class sweeper(object):
                 self.input_fields[param] = param_default
             elif isinstance(param_default, sweeper):
                 # TODO: This causes the FK model to validate; could we defer?
-                self.input_fields[param] = pw.ForeignKeyField(param_default.model)
+                self.input_fields[param] = pw.ForeignKeyField(
+                                                    param_default.model)
             elif type(param_default) in type_to_field:
                 self.input_fields[param] = type_to_field[type(param_default)](
-                    default=param_default)
+                                                    default=param_default)
             else:
                 raise ValueError("Unknown field for input argument")
 
@@ -312,9 +315,11 @@ class sweeper(object):
                     ._meta.fields.values())
             new_field_set = set(self.model._meta.fields.values())
 
-            # TODO: other checks for equality; hash is only based on field & 
-            # model name (does python include type?) If PeeWee does defaults on
-            # python side, maybe this is sufficient. 
+            # TODO: other checks for equality? Peewee hash is only based on 
+            # field & model name (does python include type?) If PeeWee does 
+            # defaults on python side, then PW's hash + field type would be 
+            # sufficient. Otherwise, may want to update default. If we 
+            # eventually have a table for metadata, will need to check that.
             drop_fields = old_field_set - new_field_set
             add_fields = new_field_set - old_field_set
 
@@ -411,8 +416,8 @@ class sweeper(object):
     def get_or_run(self, *args, **kwargs):
         # returns the original function's outputs
         query_rows = self.bind_signature(args, kwargs)
-        if len(query_rows) > 1:
-            raise ValueError("Calling sweepable with more than one set of " +
+        if len(query_rows) > 1:  
+            raise ValueError("Calling get_or_run with more than one set of " +
                 "parameters. Consider using select_or_run")
         else:
             query_row = query_rows[0]
@@ -423,7 +428,7 @@ class sweeper(object):
 
         try:
             instance = query.get()
-        except self.model.DoesNotExist: # TODO: will this catch 
+        except self.model.DoesNotExist:
             instance = self.model(**query_row)
             do_run = True
         else:
@@ -443,13 +448,9 @@ class sweeper(object):
         """
         This requires kwargs to completely define the inputs fields
         """
-        # TODO: include a created_on and completed_on in SweepableModel?
-        # which could be part of the default gen_pathname
-        # and would also create some useful metadata
-
-        # TODO: use constext manager to explicitly do DB dis/connect
-        # AND don't create the instance until function runs and output
-        # fields are assigned (or roll back on error)
+        # TODO: use constext manager to explicitly do DB dis/connect?
+        # AND don't tie file writing to transaction so it can be rolled back on
+        # error?
         
         instance.start_time = datetime.datetime.now()
         kwargs = {fname: getattr(instance, fname) 
@@ -458,7 +459,8 @@ class sweeper(object):
         instance.stop_time = datetime.datetime.now()
 
         # TODO: figure out better way to determine matching lengths
-        if len(self.output_fields) == 1 and getattr(result, '__len__', lambda: 1)() != 1:
+        result_length = getattr(result, '__len__', lambda: 1)()
+        if len(self.output_fields) == 1 and result_length != 1:
             result = [result]
         if len(self.output_fields) != len(result):
             raise ValueError(str(self) + "has mismatch between defined" + 
@@ -469,7 +471,7 @@ class sweeper(object):
         if self.save_on_run or do_save:
             instance.save_run()
         else:
-            self.unsaved_instances.add(instance)
+            self.unsaved_instances.append(instance)
         return instance
 
     def __repr__(self):
@@ -525,4 +527,5 @@ class sweepable(object):
 
 class sweepable_test(sweepable):
     def __call__(self, function):
-        return sweeper(function, self.output_fields, auto_migrate=True, save_on_run=False)
+        return sweeper(function, self.output_fields,
+            auto_migrate=True, save_on_run=False)
