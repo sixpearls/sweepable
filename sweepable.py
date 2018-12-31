@@ -2,6 +2,7 @@ import peewee
 from playhouse import reflection
 from playhouse import migrate
 import os
+import sys
 import inspect
 import pickle
 import copy
@@ -328,6 +329,13 @@ class sweeper(object):
         self.model = type(
             '%s__%s' % (self.module, self.name), (SweepableModel,), arg_fields)
         self.model.sweeper = self
+        self.model.__module__ = self.module
+        setattr(sys.modules[self.module], self.model.__name__, self.model)
+
+        # TODO: add function to user's namespace so that it can be more easily
+        # used in multiprocessing??
+
+
         if self.model.__name__ in introspected_models:
             old_field_set = set(introspected_models[self.model.__name__]\
                     ._meta.fields.values())
@@ -400,6 +408,13 @@ class sweeper(object):
         # signature and use the model instantiation? I guess that doesn't solve
         # broadcasting binding either. Can we just overwrite .isin type query
         # fields?
+
+        # TODO: helpful checks for binding args and kwargs? maybe type checks?
+        # I tried to pass in by args only, and missed an arg and got a weird
+        # error because a default sweeper was used. So I guess also update the
+        # signature to use an instance of the sweepable model instead of the
+        # sweeper?
+
         bound_args = self.signature.bind(*args, **kwargs)
         bound_args.apply_defaults()
         num_rows = 1
