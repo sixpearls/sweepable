@@ -7,13 +7,19 @@ import inspect
 import pickle
 import copy
 import datetime
+from playhouse.sqliteq import SqliteQueueDatabase
 
 __version__ = '0.0.1'
 
 # TODO: this should have an option handler for the filename, database type, etc
+# this should include ways to over-write the model, metaclass, and _meta class
 data_root = os.path.join('..','data')
 db_name = 'project_sweeps.db'
-db = peewee.SqliteDatabase(os.path.join(data_root, db_name))
+db = SqliteQueueDatabase(os.path.join(data_root, db_name))
+# TODO: the SqliteQueueDatabase seems like a good replacement for
+# peewee.SqliteDatabase, but the asynch writing means the table creation 
+# transaction may not be complete before the first query if not explicitly
+# created. 
 migrator = migrate.SqliteMigrator(db)
 
 type_to_field = {
@@ -24,7 +30,7 @@ type_to_field = {
 try:
     introspected_models = reflection.Introspector.from_database(db)\
         .generate_models(literal_column_names=True)
-except:
+except: # TODO: determine what errors to catch??
     introspected_models = {}
 
 
@@ -41,8 +47,6 @@ class FileAccessor(peewee.FieldAccessor):
         return instance.__filedata__[self.field.name]
 
     def __set__(self, instance, value):
-        # TODO: is there a way to protect this except for a get_or_create call?
-        # TODO: should also try to mark objects as immutable?
         if value is None:
             return
         if isinstance(value, str):
@@ -111,20 +115,22 @@ class FileField(peewee.CharField):
 
     def write(self, instance, value):
         # this will update the pathname using the current path function,
-        # TODO: may want to make clearer API for writing vs moving?
+        # TODO: may want to make an API for writing (this) and moving?
         if instance.id is None:
             raise ValueError("Cannot write %s because %s has no id" % 
                 (str(self), str(instance)))
         instance.__data__[self.name] = self.get_total_path(instance)
         if not os.path.isdir(self.get_path(instance)):
             os.makedirs(self.get_path(instance))
+        # TODO: I am not sure why but I was getting an error on this before.
+        """
         if os.path.exists(self.get_total_path(instance)):
             # TODO: a flag to allow over-writing?
             raise ValueError("File %s exists for %s" % 
                     (self.get_total_path(instance), 
-                    '.'.join(str(instnace), self.name))
+                    '.'.join(str(instance), self.name))
                 )
-
+        """
         self.writer(self.get_total_path(instance), self, value)
 
     def delete(self, instance):
@@ -298,8 +304,12 @@ class sweeper(object):
 
         self.process_signature()
 
+        # TODO: is there a reason not to validate here by default? see 
+        # discussion about queue database above
+
     def process_signature(self):
-        # Should this be DRYd up w.r.t. the output field processing?
+        # Should this be DRYd up w.r.t. the output field processing? No, 
+        # different enough logic
         for param in self.signature.parameters:
             param_default = self.signature.parameters[param].default
             
@@ -472,7 +482,10 @@ class sweeper(object):
                 if getattr(instance, field, None) is None:
                     do_run = True
         if do_run:
+            print("running " + str(instance))
             self.run_instance(instance)
+        else:
+            print("skipping " + str(instance))
         return instance
 
     def __call__(self, *args, **kwargs):
@@ -556,8 +569,8 @@ class sweepable(object):
                 output_fields[arg] = arg_type()
             else:
                 output_fields[arg] = type_to_field[arg_type]()
-        # TODO: better way to enforce nullable column with null default?
-        output_fields[arg].null = True
+            # TODO: better way to enforce nullable column with null default?
+            output_fields[arg].null = True
         self.output_fields = output_fields
 
     def __call__(self, function):
