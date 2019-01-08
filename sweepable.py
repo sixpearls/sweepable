@@ -29,6 +29,14 @@ VERBOSE_RUN = True
 
 # TODO: need to figure out the best API for auto_save and auto_migrate
 
+# TODO: CLI and/or interactive tools. Presumably independent of @sweepable use
+# list tables (models)
+# drop table by name
+# drop tables not in file(s)/dirs?
+# rename columns
+# 
+
+
 migrator = migrate.SqliteMigrator(db)
 
 type_to_field = {
@@ -294,7 +302,7 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
 
 class sweeper(object):
     def __init__(self, function, output_fields, auto_migrate=False, 
-    save_on_run=True, delete_files=True):
+    save_on_run=True, create_table=True, delete_files=True):
         self.function = function
         self.signature = inspect.signature(self.function)
         self.name = function.__code__.co_name
@@ -302,7 +310,7 @@ class sweeper(object):
             .split('.py')[0]
 
         # TODO: figure out how to incorporate class name if it's a method? 
-        # Or disallow
+        # Or disallow? API for over-writing naming scheme?
 
         self.model = None
         self.unsaved_instances = [] 
@@ -311,6 +319,7 @@ class sweeper(object):
         self.output_fields = output_fields
         self.auto_migrate = auto_migrate
         self.save_on_run = save_on_run
+        self.create_table = create_table
         self.delete_files = delete_files
 
         self.process_signature()
@@ -343,6 +352,45 @@ class sweeper(object):
         # TODO: this is a placeholder for a non-"framework" usage of sweepable
         return
 
+    def get_add_drop_fields(self):
+        # TODO: this feels like a generic function, not a method on sweeper?
+        # are there any other methods that ought to be refactored?
+        old_field_set = set(introspected_models[self.model.__name__]\
+                ._meta.fields.values())
+        new_field_set = set(self.model._meta.fields.values())
+
+        # TODO: other checks for equality? Peewee hash is only based on 
+        # field & model name (does python include type?) If PeeWee does 
+        # defaults on python side, then PW's hash + field type would be 
+        # sufficient. Otherwise, may want to update default. If we 
+        # eventually have a table for metadata, will need to check that.
+        drop_fields = old_field_set - new_field_set
+        add_fields = new_field_set - old_field_set
+
+        for drop_field in drop_fields.copy():
+            if isinstance(drop_field, peewee.ForeignKeyField):
+                mfield = copy.copy(drop_field)
+                mfield.name = mfield.name.replace('_id', '')
+                if mfield in add_fields:
+                    drop_fields.remove(drop_field)
+                    add_fields.remove(mfield)
+
+        return add_fields, drop_fields
+
+    def migrate(self, add_fields, drop_fields):
+        # TODO: make transaction. return status flag?
+        migrate.migrate(
+            *tuple([migrator.drop_column(
+                table=field.model._meta.table_name,
+                column_name=field.column_name,
+                ) for field in drop_fields] +
+              [migrator.add_column(
+                table=field.model._meta.table_name,
+                column_name=field.column_name,
+                field=field,
+                ) for field in add_fields])
+        )
+
     def validate(self, do_migrate=False):
         arg_fields = {**self.input_fields, **self.output_fields}
         arg_fields['__repr__'] = SweepableModel.__repr__
@@ -354,37 +402,24 @@ class sweeper(object):
 
         # add the SweepableModel class to the module where the sweepable
         # function is defined so that instances can be pickled
-        setattr(sys.modules[self.module], self.model.__name__, self.model)
+
+        try:
+            setattr(sys.modules[self.module], self.model.__name__, self.model)
+        except: # TODO: is it good to silently fail?
+            pass
 
         # add all the model field's to the sweeper to provide a shortcut for
         # queries 
         for field_name, field in self.model._meta.fields.items():
             setattr(self, field_name, field)
 
-        # TODO: add function to user's namespace so that it can be more easily
-        # used in multiprocessing??
-
+        # TODO: break out migration for user API or CLIs. probably a method
+        # to generate add/drop fields. Here, validate uses that, both empty
+        # means code/table match. Call migrate if flags set.
+        # migrate takes add/drop fields. 
 
         if self.model.__name__ in introspected_models:
-            old_field_set = set(introspected_models[self.model.__name__]\
-                    ._meta.fields.values())
-            new_field_set = set(self.model._meta.fields.values())
-
-            # TODO: other checks for equality? Peewee hash is only based on 
-            # field & model name (does python include type?) If PeeWee does 
-            # defaults on python side, then PW's hash + field type would be 
-            # sufficient. Otherwise, may want to update default. If we 
-            # eventually have a table for metadata, will need to check that.
-            drop_fields = old_field_set - new_field_set
-            add_fields = new_field_set - old_field_set
-
-            for drop_field in drop_fields.copy():
-                if isinstance(drop_field, peewee.ForeignKeyField):
-                    mfield = copy.copy(drop_field)
-                    mfield.name = mfield.name.replace('_id', '')
-                    if mfield in add_fields:
-                        drop_fields.remove(drop_field)
-                        add_fields.remove(mfield)
+            add_fields, drop_fields = self.get_add_drop_fields()
 
             if not (self.auto_migrate or do_migrate) and \
             (drop_fields or add_fields):
@@ -400,21 +435,10 @@ class sweeper(object):
 
                 raise ValueError(error_string)
             else:
-                # TODO: make transaction
-                migrate.migrate(
-                    *tuple([migrator.drop_column(
-                        table=field.model._meta.table_name,
-                        column_name=field.column_name,
-                        ) for field in drop_fields] +
-                      [migrator.add_column(
-                        table=field.model._meta.table_name,
-                        column_name=field.column_name,
-                        field=field,
-                        ) for field in add_fields])
-                )
+                self.migrate(add_fields, drop_fields)
         
-        else:
-            self.model.create_table()
+        elif self.create_table:
+            self.create_table()
 
     def select_or_run(self, *args, **kwargs):
         """
@@ -597,4 +621,4 @@ class sweepable(object):
 class sweepable_test(sweepable):
     def __call__(self, function):
         return sweeper(function, self.output_fields,
-            auto_migrate=True, save_on_run=False)
+            auto_migrate=True, create_table=False, save_on_run=False)
