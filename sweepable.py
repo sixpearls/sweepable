@@ -16,10 +16,19 @@ __version__ = '0.0.1'
 data_root = os.path.join('..','data')
 db_name = 'project_sweeps.db'
 db = SqliteQueueDatabase(os.path.join(data_root, db_name))
+VERBOSE_RUN = True
 # TODO: the SqliteQueueDatabase seems like a good replacement for
 # peewee.SqliteDatabase, but the asynch writing means the table creation 
 # transaction may not be complete before the first query if not explicitly
-# created. 
+# created.
+
+# SqliteQueueDatabase seems to be the recommended way to avoid lock timeout
+# for Sqllite:
+# https://github.com/coleifer/peewee/issues/1071
+# http://charlesleifer.com/blog/multi-threaded-sqlite-without-the-operationalerrors/
+
+# TODO: need to figure out the best API for auto_save and auto_migrate
+
 migrator = migrate.SqliteMigrator(db)
 
 type_to_field = {
@@ -123,14 +132,16 @@ class FileField(peewee.CharField):
         if not os.path.isdir(self.get_path(instance)):
             os.makedirs(self.get_path(instance))
         # TODO: I am not sure why but I was getting an error on this before.
-        """
+        # possibly it was due to get_or_run not finding it in the database?
+        # or files got saved before the output fields got written to DB?
+        # """
         if os.path.exists(self.get_total_path(instance)):
             # TODO: a flag to allow over-writing?
             raise ValueError("File %s exists for %s" % 
                     (self.get_total_path(instance), 
                     '.'.join(str(instance), self.name))
                 )
-        """
+        # """
         self.writer(self.get_total_path(instance), self, value)
 
     def delete(self, instance):
@@ -335,12 +346,20 @@ class sweeper(object):
     def validate(self, do_migrate=False):
         arg_fields = {**self.input_fields, **self.output_fields}
         arg_fields['__repr__'] = SweepableModel.__repr__
-        # TODO: this is a bug peewee, __repr__ can't be inherited?
+        # TODO: this is a bug peewee, __repr__ can't be inherited.
         self.model = type(
             '%s__%s' % (self.module, self.name), (SweepableModel,), arg_fields)
         self.model.sweeper = self
         self.model.__module__ = self.module
+
+        # add the SweepableModel class to the module where the sweepable
+        # function is defined so that instances can be pickled
         setattr(sys.modules[self.module], self.model.__name__, self.model)
+
+        # add all the model field's to the sweeper to provide a shortcut for
+        # queries 
+        for field_name, field in self.model._meta.fields.items():
+            setattr(self, field_name, field)
 
         # TODO: add function to user's namespace so that it can be more easily
         # used in multiprocessing??
@@ -366,7 +385,7 @@ class sweeper(object):
                     if mfield in add_fields:
                         drop_fields.remove(drop_field)
                         add_fields.remove(mfield)
-                        
+
             if not (self.auto_migrate or do_migrate) and \
             (drop_fields or add_fields):
                 error_string = self.model.__model_str__() + "current code " +\
@@ -459,7 +478,7 @@ class sweeper(object):
         return query_rows
 
     def get_or_run(self, *args, **kwargs):
-        # returns the original function's outputs
+        # returns the model instance
         query_rows = self.bind_signature(args, kwargs)
         if len(query_rows) > 1:  
             raise ValueError("Calling get_or_run with more than one set of " +
@@ -482,24 +501,23 @@ class sweeper(object):
                 if getattr(instance, field, None) is None:
                     do_run = True
         if do_run:
-            print("running " + str(instance))
+            if VERBOSE_RUN:
+                print("running " + str(instance))
             self.run_instance(instance)
         else:
-            print("skipping " + str(instance))
+            if VERBOSE_RUN:
+                print("skipping " + str(instance))
         return instance
 
     def __call__(self, *args, **kwargs):
+        # returns what original function returns
         # TODO: should call return model instance or just output_fields?
         instance = self.get_or_run(*args, **kwargs)
         return tuple([getattr(instance,key) for key in self.output_fields])
 
     def run_instance(self, instance, do_save=False):
-        """
-        This requires kwargs to completely define the inputs fields
-        """
-        # TODO: use constext manager to explicitly do DB dis/connect?
-        # AND don't tie file writing to transaction so it can be rolled back on
-        # error?
+        # TODO: use context manager to explicitly do DB dis/connect? AND tie 
+        # file writing to transaction so it can be rolled back on error?
         
         instance.start_time = datetime.datetime.now()
         kwargs = {fname: getattr(instance, fname) 
