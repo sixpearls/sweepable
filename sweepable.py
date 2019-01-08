@@ -297,6 +297,9 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
     def __repr__(self):
         return '<%s: %s>' % (self.__class__.__model_str__(), self.__str__())
 
+    def outputs(self):
+        return tuple([getattr(self,key) for key in self.sweeper.output_fields])
+
     # TODO: __str__ here gets used in ModelBase __repr__ assignment :5419
     # TODO: is there some way to prevent saving when not creating?
 
@@ -516,7 +519,7 @@ class sweeper(object):
 
         try:
             instance = query.get()
-        except self.model.DoesNotExist:
+        except (self.model.DoesNotExist, peewee.OperationalError):
             instance = self.model(**query_row)
             do_run = True
         else:
@@ -534,10 +537,12 @@ class sweeper(object):
         return instance
 
     def __call__(self, *args, **kwargs):
-        # returns what original function returns
-        # TODO: should call return model instance or just output_fields?
+        # returns the model instance
+
+        # I strongly prefer working with the SweepableModel instances.
+        # TODO: add a method/attribute on the model to return original outputs
         instance = self.get_or_run(*args, **kwargs)
-        return tuple([getattr(instance,key) for key in self.output_fields])
+        return instance
 
     def run_instance(self, instance, do_save=False):
         # TODO: use context manager to explicitly do DB dis/connect? AND tie 
@@ -554,7 +559,7 @@ class sweeper(object):
         if len(self.output_fields) == 1 and result_length != 1:
             result = [result]
         if len(self.output_fields) != len(result):
-            raise ValueError(str(self) + "has mismatch between defined" + 
+            raise ValueError(str(self) + " has mismatch between defined " + 
                 "output fields and returned values for " + str(instance))
         for output_field, value in zip(self.output_fields, result):
             setattr(instance, output_field, value)
