@@ -147,7 +147,7 @@ class FileField(peewee.CharField):
             # TODO: a flag to allow over-writing?
             raise ValueError("File %s exists for %s" % 
                     (self.get_total_path(instance), 
-                    '.'.join(str(instance), self.name))
+                    '.'.join((str(instance), self.name)))
                 )
         # """
         self.writer(self.get_total_path(instance), self, value)
@@ -200,6 +200,9 @@ else:
 
 
     type_to_field[pandas.DataFrame] = DataFrameField
+
+    def to_dataframe(query):
+        return pandas.read_sql(query.sql()[0], db.connection())
 
 
 """
@@ -441,7 +444,7 @@ class sweeper(object):
                 self.migrate(add_fields, drop_fields)
         
         elif self.create_table:
-            self.create_table()
+            self.model.create_table()
 
     def select_or_run(self, *args, **kwargs):
         """
@@ -602,7 +605,7 @@ class sweeper(object):
         def to_dataframe(self, query=None):
             if query is None:
                 query = self.select()
-            return pandas.read_sql(query.sql()[0], db.connection())
+            return to_dataframe(query)
 
 
 class sweepable(object):
