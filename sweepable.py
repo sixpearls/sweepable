@@ -202,7 +202,8 @@ else:
     type_to_field[pandas.DataFrame] = DataFrameField
 
     def to_dataframe(query):
-        return pandas.read_sql(query.sql()[0], db.connection())
+        sql, params = query.sql()
+        return pandas.read_sql(sql=sql, con=db.connection(), params=params)
 
 
 """
@@ -406,6 +407,12 @@ class sweeper(object):
         self.model.sweeper = self
         self.model.__module__ = self.module
 
+        for field in self.input_fields:
+            self.input_fields[field] = self.model._meta.fields[field]
+
+        for field in self.output_fields:
+            self.output_fields[field] = self.model._meta.fields[field]
+
         # add the SweepableModel class to the module where the sweepable
         # function is defined so that instances can be pickled
 
@@ -418,11 +425,6 @@ class sweeper(object):
         # queries 
         for field_name, field in self.model._meta.fields.items():
             setattr(self, field_name, field)
-
-        # TODO: break out migration for user API or CLIs. probably a method
-        # to generate add/drop fields. Here, validate uses that, both empty
-        # means code/table match. Call migrate if flags set.
-        # migrate takes add/drop fields. 
 
         if self.model.__name__ in introspected_models:
             add_fields, drop_fields = self.get_add_drop_fields()
@@ -445,6 +447,9 @@ class sweeper(object):
         
         elif self.create_table:
             self.model.create_table()
+
+    def drop_table(self):
+        db.drop_tables(self.model)
 
     def select_or_run(self, *args, **kwargs):
         """
