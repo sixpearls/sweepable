@@ -42,6 +42,7 @@ migrator = migrate.SqliteMigrator(db)
 type_to_field = {
     int: peewee.IntegerField,
     float: peewee.FloatField,
+    bool: peewee.BooleanField,
 }
 
 try:
@@ -329,8 +330,6 @@ class sweeper(object):
         self.create_table = create_table
         self.delete_files = delete_files
 
-        self.process_signature()
-
         # TODO: is there a reason not to validate here by default? see 
         # discussion about queue database above
 
@@ -346,7 +345,6 @@ class sweeper(object):
             param_default.default is not None):
                 self.input_fields[param] = param_default
             elif isinstance(param_default, sweeper):
-                # TODO: This causes the FK model to validate; could we defer?
                 self.input_fields[param] = peewee.ForeignKeyField(
                                                     param_default.model)
             elif type(param_default) in type_to_field:
@@ -399,6 +397,7 @@ class sweeper(object):
         )
 
     def validate(self, do_migrate=False):
+        self.process_signature()
         arg_fields = {**self.input_fields, **self.output_fields}
         arg_fields['__repr__'] = SweepableModel.__repr__
         # TODO: this is a bug peewee, __repr__ can't be inherited.
@@ -431,7 +430,7 @@ class sweeper(object):
 
             if not (self.auto_migrate or do_migrate) and \
             (drop_fields or add_fields):
-                error_string = self.model.__model_str__() + "current code " +\
+                error_string = self.model.__model_str__() + " current code " +\
                 "specification does not match database. You may need to" +\
                 " migrate the database."
                 if drop_fields:
