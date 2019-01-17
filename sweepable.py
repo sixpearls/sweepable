@@ -302,8 +302,18 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
     def __repr__(self):
         return '<%s: %s>' % (self.__class__.__model_str__(), self.__str__())
 
-    def outputs(self):
-        return tuple([getattr(self,key) for key in self.sweeper.output_fields])
+    def fields_as_type(self, fields, astype=dict):
+        fdict = {key: getattr(self,key) for key in fields}
+        if astype is dict:
+            return fdict
+        else:
+            return astype(fdict.values())
+
+    def input_fields(self, astype=dict):
+         return self.fields_as_type(self.sweeper.input_fields, astype)
+
+    def output_fields(self, astype=tuple):
+        return self.fields_as_type(self.sweeper.output_fields, astype)
 
     # TODO: __str__ here gets used in ModelBase __repr__ assignment :5419
     # TODO: is there some way to prevent saving when not creating?
@@ -547,8 +557,7 @@ class sweeper(object):
         # returns the model instance
 
         # I strongly prefer working with the SweepableModel instances.
-        # TODO: add a method/attribute on the model to return original outputs
-        instance = self.get_or_run(*args, **kwargs)
+        instance = self.select_or_run(*args, **kwargs)
         return instance
 
     def run_instance(self, instance, do_save=False):
