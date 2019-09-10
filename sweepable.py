@@ -342,7 +342,8 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
 
 class sweeper(object):
     def __init__(self, function, output_fields, auto_migrate=False, 
-    save_on_run=True, create_table=True, delete_files=True):
+    save_on_run=True, create_table=True, delete_files=True, 
+    save_output_fields=True):
         self.function = function
         self.signature = inspect.signature(self.function)
         self.name = function.__code__.co_name
@@ -361,6 +362,7 @@ class sweeper(object):
         self.save_on_run = save_on_run
         self.create_table = create_table
         self.delete_files = delete_files
+        self.save_output_fields = save_output_fields
 
         # TODO: is there a reason not to validate here by default? see 
         # discussion about queue database above
@@ -430,7 +432,9 @@ class sweeper(object):
 
     def validate(self, do_migrate=False):
         self.process_signature()
-        arg_fields = {**self.input_fields, **self.output_fields}
+        arg_fields = {**self.input_fields}
+        if self.save_output_fields:
+            arg_fields.update(self.output_fields)
         arg_fields['__repr__'] = SweepableModel.__repr__
         # TODO: this is a bug peewee, __repr__ can't be inherited.
         self.model = type(
@@ -441,8 +445,9 @@ class sweeper(object):
         for field in self.input_fields:
             self.input_fields[field] = self.model._meta.fields[field]
 
-        for field in self.output_fields:
-            self.output_fields[field] = self.model._meta.fields[field]
+        if self.save_output_fields:
+            for field in self.output_fields:
+                self.output_fields[field] = self.model._meta.fields[field]
 
         # add the SweepableModel class to the module where the sweepable
         # function is defined so that instances can be pickled
@@ -566,6 +571,13 @@ class sweeper(object):
             for field in self.output_fields:
                 if getattr(instance, field, None) is None:
                     do_run = True
+
+        if not self.save_output_fields:
+            # TODO: Should we allow in-memory memoization?
+            # On the one hand, this should only be used on very cheap methods
+            # on the other, it still seems like a nice feature
+            do_run = True
+
         if do_run:
             if VERBOSE_RUN:
                 print("running " + str(instance))
@@ -649,20 +661,40 @@ class sweepable(object):
         output_fields = {}
         for arg in kwargs:
             arg_type = kwargs[arg]
-            if isinstance(arg_type, peewee.Field):
+            if arg_type is None:
+                output_fields[arg] = None
+            elif isinstance(arg_type, peewee.Field):
                 output_fields[arg] = arg_type
             elif issubclass(arg_type, peewee.Field):
                 output_fields[arg] = arg_type()
-            else:
+            elif arg_type in type_to_field:
                 output_fields[arg] = type_to_field[arg_type]()
+            else:
+                output_fields[arg] = None
             # TODO: better way to enforce nullable column with null default?
-            output_fields[arg].null = True
+            if isinstance(output_fields[arg], peewee.Field):
+                output_fields[arg].null = True
         self.output_fields = output_fields
 
     def __call__(self, function):
         return sweeper(function, self.output_fields)
 
+# TODO: setup so these modifiers can be mixed in:
+
 class sweepable_test(sweepable):
     def __call__(self, function):
         return sweeper(function, self.output_fields,
             auto_migrate=True, create_table=False, save_on_run=False)
+
+class pseudo_unsweepable(sweepable):
+    def __call__(self, function):
+        return sweeper(function, self.output_fields, save_output_fields=False)
+
+class pseudo_unsweepable_test(sweepable):
+    # TODO: repeat calls create new SweepableModel instances. I'm not sure if 
+    # this is an issue with the test mixin in all cases or specifically the 
+    # combo. Ideally only a single instance exists, and the reference gets 
+    # re-passed.
+    def __call__(self, function):
+        return sweeper(function, self.output_fields, auto_migrate=True, 
+            create_table=False, save_on_run=False, save_output_fields=False)
