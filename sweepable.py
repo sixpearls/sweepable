@@ -612,12 +612,14 @@ class sweeper(object):
         num_output_fields = len(self.output_fields)
         if num_output_fields == 1 and result_length != 1:
             result = [result]
-        if (num_output_fields == 0 and result is not None) or 
-        (num_output_fields > 0 and num_output_fields != result_length):
+        if ((num_output_fields == 0 and result is not None) or 
+                (num_output_fields > 0 and num_output_fields != result_length)):
             raise ValueError(str(self) + " has mismatch between defined " + 
                 "output fields and returned values for " + str(instance))
-        for output_field, value in zip(self.output_fields, result):
-            setattr(instance, output_field, value)
+
+        if result is not None:
+            for output_field, value in zip(self.output_fields, result):
+                setattr(instance, output_field, value)
 
         if self.save_on_run or do_save:
             instance.save_run()
