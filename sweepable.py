@@ -61,6 +61,7 @@ type_to_field = {
     int: peewee.IntegerField,
     float: peewee.FloatField,
     bool: peewee.BooleanField,
+    str: peewee.CharField(max_length=255, default='')
 }
 
 try:
@@ -526,6 +527,9 @@ class sweeper(object):
         for arg, val in bound_args.arguments.items():
             # TODO: handle field types that may have __len__
             # TODO: type checking on arguments
+            if (isinstance(getattr(self.model, arg).default, str) and 
+            isinstance(val, str)):
+                arg_rows = 1
             arg_rows = getattr(val, '__len__', lambda: 1)()
             if arg_rows > 1 and arg_rows != num_rows:
                 if num_rows == 1:
