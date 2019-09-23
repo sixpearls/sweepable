@@ -609,9 +609,11 @@ class sweeper(object):
 
         # TODO: figure out better way to determine matching lengths
         result_length = getattr(result, '__len__', lambda: 1)()
-        if len(self.output_fields) == 1 and result_length != 1:
+        num_output_fields = len(self.output_fields)
+        if num_output_fields == 1 and result_length != 1:
             result = [result]
-        if len(self.output_fields) != len(result):
+        if (num_output_fields == 0 and result is not None) or 
+        (num_output_fields > 0 and num_output_fields != result_length):
             raise ValueError(str(self) + " has mismatch between defined " + 
                 "output fields and returned values for " + str(instance))
         for output_field, value in zip(self.output_fields, result):
