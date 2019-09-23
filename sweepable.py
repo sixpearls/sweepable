@@ -269,8 +269,10 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
     def __init__(self, *args, **kwargs):
         self.__filedata__ = {}
         super().__init__(*args, **kwargs)
-        if self.id is None:
+        if self.id is None: # not in DB
             self.sweeper.unsaved_instances.append(self)
+        elif not self.sweeper.save_output_fields: # in DB, but not saving
+            self.sweeper.run_instance(self)
 
     def save_run(self, force_insert=False, only=None):
         if not only:
