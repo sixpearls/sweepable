@@ -180,6 +180,24 @@ class FileField(peewee.CharField):
         if os.path.exists(self.get_total_path(instance)):
             os.remove(self.get_total_path(instance))
 
+class ModuleField(FileField):
+    """
+    Assign as an output field, input field of same name default to ''
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reader = None
+        self.writer = None
+
+    def write(self, instance, value):
+        pass #?
+
+    def read(self, instance):
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+
 try:
     import numpy
 except:
@@ -273,6 +291,7 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
         if self.id is None: # not in DB
             self.sweeper.unsaved_instances.append(self)
         elif not self.sweeper.save_output_fields: # in DB, but not saving
+            print("pseudo_run, id=", self.id)
             self.sweeper.run_instance(self)
 
     def save_run(self, force_insert=False, only=None):
@@ -617,6 +636,7 @@ class sweeper(object):
         num_output_fields = len(self.output_fields)
         if num_output_fields == 1 and result_length != 1:
             result = [result]
+            result_length = 1
         if ((num_output_fields == 0 and result is not None) or 
                 (num_output_fields > 0 and num_output_fields != result_length)):
             raise ValueError(str(self) + " has mismatch between defined " + 
