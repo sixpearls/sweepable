@@ -17,6 +17,9 @@ data_root = os.path.join('..','data')
 db_name = 'project_sweeps.db'
 db = SqliteQueueDatabase(os.path.join(data_root, db_name))
 VERBOSE_RUN = True
+
+# TODO: make floats nullable always? or as an option? 
+
 # TODO: the SqliteQueueDatabase seems like a good replacement for
 # peewee.SqliteDatabase, but the asynch writing means the table creation 
 # transaction may not be complete before the first query if not explicitly
