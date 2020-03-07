@@ -11,52 +11,11 @@ from playhouse.sqliteq import SqliteQueueDatabase
 
 __version__ = '0.0.1'
 
-# TODO: this should have an option handler for the filename, database type, etc
-# this should include ways to over-write the model, metaclass, and _meta class
+# options
 data_root = os.path.join('..','data')
 db_name = 'project_sweeps.db'
 db = SqliteQueueDatabase(os.path.join(data_root, db_name))
 VERBOSE_RUN = True
-
-# TODO: make floats nullable always? or as an option? 
-
-# TODO: the SqliteQueueDatabase seems like a good replacement for
-# peewee.SqliteDatabase, but the asynch writing means the table creation 
-# transaction may not be complete before the first query if not explicitly
-# created (model validated).
-
-# SqliteQueueDatabase seems to be the recommended way to avoid lock timeout
-# for Sqllite:
-# https://github.com/coleifer/peewee/issues/1071
-# http://charlesleifer.com/blog/multi-threaded-sqlite-without-the-operationalerrors/
-
-# TODO: need to figure out the best API for auto_save and auto_migrate
-
-# TODO: CLI and/or interactive tools. Presumably independent of @sweepable use
-# list tables (models)
-# drop table by name
-# drop tables not in file(s)/dirs?
-# rename columns
-# 
-
-# TODO: a way to generate compound fields, with a built-in for SimuPy result, selectable
-# to include x, y, and e. Generally this would be useful for selecting partitions of a single
-# array that could be saved more efficiently. At least one dimension would be fixed, I guess?
-
-# TODO: how to use arrays as inputs? A 1D array w/ fixed size can be passed by *arg if the inputs are scalars
-# and first. Anyway to make the syntax nicer in general? Won't fix variable sizes, but could 
-# establish pattern of using pandas.DF and try to get a dict of the row with **kwarg expansion
-
-# TODO: a matlab workspace dict? Options to limit and require fields and their dimensions,
-# use compression,
-# option to add to instance namespace -- maybe by not providing an output_field name?
-
-
-# TODO: figure out how to handle code-gen types -- I guess it's about feeding in a file-name?
-# is the issue that the function needs to handle the file-writing? I could say the user ought to
-# create a model for the parameters and use that ID, but it would be nice to have it streamlined.
-# OR I could try to figure out magic or something to provide a reference to the peewee model's self
-# to access self.id? 
 
 migrator = migrate.SqliteMigrator(db)
 
