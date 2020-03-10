@@ -658,6 +658,8 @@ class sweepable(object):
                 output_fields[arg] = None
             elif isinstance(arg_type, peewee.Field):
                 output_fields[arg] = arg_type
+            elif isinstance(arg_type, sweeper):
+                output_fields[arg] = peewee.ForeignKeyField(arg_type.model)
             elif issubclass(arg_type, peewee.Field):
                 output_fields[arg] = arg_type()
             elif arg_type in type_to_field:
