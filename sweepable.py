@@ -32,59 +32,6 @@ try:
 except: # TODO: determine what errors to catch??
     introspected_models = {}
 
-class EagerForeignKeyAccesor(peewee.ForeignKeyAccessor):
-    def get_rel_instance(self, instance):
-        value = instance.__data__.get(self.name)
-        if value is not None or self.name in instance.__rel__:
-            if self.name not in instance.__rel__ or (len(instance.__rel__[self.name].__rel__) < len(self.field.rel_model._meta.refs)):
-                # db.connect()
-                try:
-                    obj = self.rel_model.get_by_id(value)
-                except peewee.OperationalError:
-                    db.close()
-                    obj = self.rel_model.get_by_id(value)
-                    #super(self.rel_model, self.rel_model).get_by_id(value)
-                    # try:
-                    
-                    # except peewee.OperationalError:
-                    #     pass
-                # else:
-                #     db.close()
-
-                instance.__rel__[self.name] = obj
-            return instance.__rel__[self.name]
-        elif not self.field.null:
-            raise self.rel_model.DoesNotExist
-        return value
-    
-    # def __set__(self, instance, obj):
-    #     if isinstance(obj, self.rel_model):
-    #         instance.__data__[self.name] = getattr(obj, self.field.rel_field.name)
-    #         if len(obj.__rel__) < len(self.rel_model._meta.refs):
-    #             # db.connect()
-    #             try:
-    #                 obj = self.rel_model.get_by_id(instance.__data__[self.name])
-    #             except peewee.OperationalError:
-    #                 db.close()
-    #                 obj = self.rel_model.get_by_id(instance.__data__[self.name])
-    #                 pass
-    #             # else:
-    #             #     # db.close()
-    #         instance.__rel__[self.name] = obj
-    #     else:
-    #         fk_value = instance.__data__.get(self.name)
-    #         instance.__data__[self.name] = obj
-    #         if obj != fk_value and self.name in instance.__rel__:
-    #             del instance.__rel__[self.name]
-    #     instance._dirty.add(self.name)
-
-class EagerForeignKeyField(peewee.ForeignKeyField):
-    accessor_class = EagerForeignKeyAccesor
-    # accessor_class = peewee.ForeignKeyAccessor
-    
-    def __init__(self, *args, **kwargs):
-        return super(EagerForeignKeyField, self).__init__(*args, **kwargs)
-
 class FileAccessor(peewee.FieldAccessor):
     def __get__(self, instance, instance_type=None):
         if instance is None:
@@ -279,7 +226,6 @@ class SweepableMetadata(peewee.Metadata):
 
 class SweepableModelBase(peewee.ModelBase):
     def __new__(cls, name, bases, attrs):
-        print(name)
         cls = super().__new__(cls, name, bases, attrs)
         for key, value in cls._meta.fields.items():
             if isinstance(value, FileField):
@@ -297,7 +243,6 @@ class SweepableModelBase(peewee.ModelBase):
 def sweepable_backref(field):
     return '%s__%s' % (field.rel_model._meta.name, field.name)
 
-# def recursive
 
 class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
     start_time = peewee.DateTimeField()
@@ -310,7 +255,6 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
 
     def __init__(self, *args, **kwargs):
         self.__filedata__ = {}
-        self.eagerly_fetched = False
         super().__init__(*args, **kwargs)
         if self.id is None: # not in DB
             self.sweeper.unsaved_instances.append(self)
@@ -383,34 +327,6 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
     def output_fields(self, astype=tuple):
         return self.fields_as_type(self.sweeper.output_fields, astype)
 
-    # @classmethod
-    # def get(cls, *query, **filters):
-    #     #related_models = cls._meta.model_refs.keys()
-    #     model_aliases_fkfield = {}
-    #     for fk_field, fk_model in cls._meta.refs.items():
-    #         model_alias = fk_model.alias()
-    #         model_aliases_fkfield[model_alias] = fk_field
-        
-    #     for field in cls._meta.sorted_fields:
-    #         if field.model is not cls:
-    #             print("\n\n\n\n\n",type(cls),"\n\n\n\n\n")
-    #             raise ValueError("Failed here because %s is not %s" % (field.model, cls))
-    #     sq = cls.select(cls, *model_aliases_fkfield.keys())
-
-    #     for model_alias, fk_field in model_aliases_fkfield.items():
-    #         sq = sq.join_from(cls, model_alias, on=(fk_field==getattr(model_alias, fk_field.rel_field.name)))
-        
-    #     if query:
-    #         # Handle simple lookup using just the primary key.
-    #         if len(query) == 1 and isinstance(query[0], int):
-    #             sq = sq.where(cls._meta.primary_key == query[0])
-    #         else:
-    #             sq = sq.where(*query)
-    #     if filters:
-    #         sq = sq.filter(**filters)
-
-    #     return sq.get()
-
     # TODO: __str__ here gets used in ModelBase __repr__ assignment :5419
     # TODO: is there some way to prevent saving when not creating?
 
@@ -454,9 +370,9 @@ class sweeper(object):
             param_default.default is not None):
                 self.input_fields[param] = param_default
             elif isinstance(param_default, sweeper):
-                self.input_fields[param] = EagerForeignKeyField(
-                                                    param_default.model, backref=sweepable_backref)
-                # self.input_fields[param].accessor_class = GetByIDForeignKeyAccesor
+                self.input_fields[param] = peewee.ForeignKeyField(
+                                                    param_default.model, 
+                                                    backref=sweepable_backref)
             elif type(param_default) in type_to_field:
                 self.input_fields[param] = type_to_field[type(param_default)](
                                                     default=param_default)
@@ -643,38 +559,16 @@ class sweeper(object):
             query_filter = query_filter & (getattr(self.model, field) == value)
         
         # TODO: can I just pre-fetch any foreign keys?? will that solve it??
-        
-        
-        print("querying in get_or_run for ",self)
-        # db.connect()
+
         try:
             instance = self.model.get(query_filter) # query.get()
         except (self.model.DoesNotExist, peewee.OperationalError):
             instance = self.model(**query_row)
             do_run = True
-            # db.close()
         else:
-            # db.close()
-            print("found instance...")
             do_run = False
             for field in self.output_fields:
                 output_field = getattr(instance, field, None)
-                try:
-                    output_field
-                except peewee.OperationalError:
-                    field_obj = self.model._meta.fields[field] # getattr(instance, .column_name)
-                # if isinstance(field_obj, peewee.ForeignKeyField):
-                #     try:
-                #         output_field = field_obj.rel_model.get_by_id(getattr(instance, field_obj.object_id_name))
-                #     except peewee.OperationalError:
-                #         print("errored")
-                #         output_field = None
-                #     else:
-                #         print("...",output_field)
-                #         setattr(instance, field, field_obj)
-                #     
-                # else:
-                #     pass
                 if output_field is None:
                     do_run = True
                     break
@@ -778,8 +672,8 @@ class sweepable(object):
             elif isinstance(arg_type, peewee.Field):
                 output_fields[arg] = arg_type
             elif isinstance(arg_type, sweeper):
-                output_fields[arg] = EagerForeignKeyField(arg_type.model, backref=sweepable_backref)
-                # output_fields[arg].accessor_class = GetByIDForeignKeyAccesor
+                output_fields[arg] = peewee.ForeignKeyField(arg_type.model,
+                    backref=sweepable_backref)
             elif issubclass(arg_type, peewee.Field):
                 output_fields[arg] = arg_type()
             elif arg_type in type_to_field:
