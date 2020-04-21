@@ -9,6 +9,9 @@ import copy
 import datetime
 from playhouse.sqliteq import SqliteQueueDatabase
 
+
+import textwrap
+
 __version__ = '0.0.1'
 
 # options
@@ -306,13 +309,30 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
             self._meta.fields[filefield].delete(self)
         return super().delete_instance(recursive, delete_nullable)
     
+    def printable_string(self, indent_level=0):
+        base_dict_to_print = {field: getattr(self, field) for field in self.sweeper.input_fields} 
+        data_rep_strs = []
+        for field, value in base_dict_to_print.items():
+            if isinstance(value, SweepableModel):
+                field = '\n%s' % field
+                value = '%s\n' % value.printable_string(indent_level+1)
+            data_rep_strs.append('%s=%s' % (field, value))
+        data_rep_str = ', '.join(data_rep_strs)
+        if indent_level < 0:
+            unwrapped_str = data_rep_str
+        else:    
+            unwrapped_str = '<%s: %s>' % (self.__class__.__model_str__(), data_rep_str)
+        indent_str = '  '*(indent_level+1)
+        wrapper = textwrap.TextWrapper(initial_indent=indent_str, subsequent_indent=indent_str, replace_whitespace=False)
+        wrapped_string = wrapper.wrap(unwrapped_str)
+        return '\n'.join(wrapped_string)
+        
+    
     def __str__(self):
-        return ', '.join([
-            '%s=%s' % (field, getattr(self, field)) 
-            for field in self.sweeper.input_fields])
+        return self.printable_string()
     
     def __repr__(self):
-        return '<%s: %s>' % (self.__class__.__model_str__(), self.__str__())
+        return self.printable_string()
 
     def fields_as_type(self, fields, astype=dict):
         fdict = {key: getattr(self,key) for key in fields}
@@ -581,11 +601,15 @@ class sweeper(object):
 
         if do_run:
             if VERBOSE_RUN:
-                print("running " + str(instance))
-            self.run_instance(instance)
+                print("\nrunning " + instance.__repr__() + "\n")
+            try:
+                self.run_instance(instance)
+            except Exception as inst:
+                print("Failed while running\n" + instance.__repr__())
+
         else:
             if VERBOSE_RUN:
-                print("skipping " + str(instance))
+                print("\nskipping " + instance.__repr__() + "\n")
         return instance
 
     def __call__(self, *args, **kwargs):
