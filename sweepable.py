@@ -309,26 +309,40 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
             self._meta.fields[filefield].delete(self)
         return super().delete_instance(recursive, delete_nullable)
     
-    def printable_string(self, indent_level=0, do_wrap=True):
+    def printable_string(self, wrap_width=80, as_list=False, minimum_width=10):
+        # TODO: add settings for default wrap_width, minimum length?
         base_dict_to_print = {field: getattr(self, field) for field in self.sweeper.input_fields} 
-        data_rep_strs = []
-        indent_str = '  '*(indent_level+1)
+        data_rep_str_fks_list = []
+        data_rep_str_no_fk_list = []
+        prev_value = None
         for field, value in base_dict_to_print.items():
             if isinstance(value, SweepableModel):
-                field = '\n%s%s ' % (indent_str, field)
-                value = ' %s\n' % value.printable_string(indent_level+1, False).replace('\n', '')
-            data_rep_strs.append('%s=%s' % (field, value))
-        data_rep_str = ', '.join(data_rep_strs)
-        if indent_level < 0:
-            unwrapped_str = data_rep_str
-        else:    
-            unwrapped_str = '<%s: %s>' % (self.__class__.__model_str__(), data_rep_str)
-        if do_wrap:
-            wrapper = textwrap.TextWrapper(initial_indent=indent_str, subsequent_indent=indent_str, drop_whitespace=False, replace_whitespace=False)
-            wrapped_string = wrapper.wrap(unwrapped_str)
-            return '\n'.join(wrapped_string)
-        else:
-            return unwrapped_str
+                field = '%s=' % field
+                value = value.printable_string(max(wrap_width-len(field), minimum_width), True)
+                
+                data_rep_str_fks_list.append(
+                    field + ('\n'+' '*len(field)).join(value)
+                )
+            else:
+                data_rep_str_no_fk_list.append('%s=%s' % (field, value))
+        data_rep_str_no_fk = ', '.join(data_rep_str_no_fk_list)
+        data_rep_str_fks_list = list(map(lambda x: x + ',', data_rep_str_fks_list))
+
+        if data_rep_str_fks_list:
+            data_rep_str_no_fk = data_rep_str_no_fk + ','
+            data_rep_str_fks_list[-1] = data_rep_str_fks_list[-1][:-1]
+        
+        unwrapped_str_no_fk = '<%s: %s' % (self.__class__.__model_str__(), data_rep_str_no_fk)
+
+        wrapper = textwrap.TextWrapper(#initial_indent=indent_str, subsequent_indent=indent_str, 
+            drop_whitespace=False, replace_whitespace=False, width=max(wrap_width, minimum_width))
+        wrapped_string = wrapper.wrap(unwrapped_str_no_fk)
+        wrapped_string = wrapped_string + data_rep_str_fks_list
+        wrapped_string[-1] += '>'
+        if as_list:
+            return wrapped_string
+        return '\n'.join(wrapped_string)
+
         
     
     def __str__(self):
