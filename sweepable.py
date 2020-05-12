@@ -8,7 +8,7 @@ import pickle
 import copy
 import datetime
 from playhouse.sqliteq import SqliteQueueDatabase
-
+import warnings
 
 import textwrap
 
@@ -309,23 +309,26 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
             self._meta.fields[filefield].delete(self)
         return super().delete_instance(recursive, delete_nullable)
     
-    def printable_string(self, indent_level=0):
+    def printable_string(self, indent_level=0, do_wrap=True):
         base_dict_to_print = {field: getattr(self, field) for field in self.sweeper.input_fields} 
         data_rep_strs = []
+        indent_str = '  '*(indent_level+1)
         for field, value in base_dict_to_print.items():
             if isinstance(value, SweepableModel):
-                field = '\n%s' % field
-                value = '%s\n' % value.printable_string(indent_level+1)
+                field = '\n%s%s ' % (indent_str, field)
+                value = ' %s\n' % value.printable_string(indent_level+1, False).replace('\n', '')
             data_rep_strs.append('%s=%s' % (field, value))
         data_rep_str = ', '.join(data_rep_strs)
         if indent_level < 0:
             unwrapped_str = data_rep_str
         else:    
             unwrapped_str = '<%s: %s>' % (self.__class__.__model_str__(), data_rep_str)
-        indent_str = '  '*(indent_level+1)
-        wrapper = textwrap.TextWrapper(initial_indent=indent_str, subsequent_indent=indent_str, replace_whitespace=False)
-        wrapped_string = wrapper.wrap(unwrapped_str)
-        return '\n'.join(wrapped_string)
+        if do_wrap:
+            wrapper = textwrap.TextWrapper(initial_indent=indent_str, subsequent_indent=indent_str, drop_whitespace=False, replace_whitespace=False)
+            wrapped_string = wrapper.wrap(unwrapped_str)
+            return '\n'.join(wrapped_string)
+        else:
+            return unwrapped_str
         
     
     def __str__(self):
@@ -351,9 +354,8 @@ class SweepableModel(peewee.Model, metaclass=SweepableModelBase):
     # TODO: is there some way to prevent saving when not creating?
 
 class sweeper(object):
-    def __init__(self, function, output_fields, auto_migrate=False, 
-    save_on_run=True, create_table=True, delete_files=True, 
-    save_output_fields=True):
+    def __init__(self, function, output_fields, save_on_run=True, 
+    create_table=True, delete_files=True, save_output_fields=True):
         self.function = function
         self.signature = inspect.signature(self.function)
         self.name = function.__code__.co_name
@@ -368,7 +370,6 @@ class sweeper(object):
         # TODO: for some reason testing set membership failed but list worked?
         self.input_fields = {}
         self.output_fields = output_fields
-        self.auto_migrate = auto_migrate
         self.save_on_run = save_on_run
         self.create_table = create_table
         self.delete_files = delete_files
@@ -442,7 +443,7 @@ class sweeper(object):
                 ) for field in add_fields])
         )
 
-    def validate(self, do_migrate=False):
+    def validate(self):
         self.process_signature()
         arg_fields = {**self.input_fields}
         if self.save_output_fields:
@@ -476,9 +477,9 @@ class sweeper(object):
 
         if self.model.__name__ in introspected_models:
             add_fields, drop_fields = self.get_add_drop_fields()
+            # self.migrate(*self.get_add_drop_fields()) can be used
 
-            if not (self.auto_migrate or do_migrate) and \
-            (drop_fields or add_fields):
+            if drop_fields or add_fields:
                 error_string = self.model.__model_str__() + " current code " +\
                 "specification does not match database. You may need to" +\
                 " migrate the database."
@@ -489,10 +490,8 @@ class sweeper(object):
                     error_string += "\nNon-matching fields in code spec: " +\
                         ", ".join([str(el) for el in add_fields])
 
-                raise ValueError(error_string)
-            else:
-                self.migrate(add_fields, drop_fields)
-        
+                warnings.warn(error_string, RuntimeWarning)
+
         elif self.create_table:
             self.model.create_table()
 
